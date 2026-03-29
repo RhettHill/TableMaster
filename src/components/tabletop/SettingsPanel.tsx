@@ -393,7 +393,6 @@ export default function SettingsPanel({
   visibilityMode,
   onSetVisibilityMode,
 }: SettingsPanelProps) {
-  const navigate = useNavigate();
   const sceneSettings = useGameStore((s) => s.sceneSettings);
   const gameSettings = useGameStore((s) => s.gameSettings);
   const setSceneSettings = useGameStore((s) => s.setSceneSettings);
