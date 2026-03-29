@@ -1,39 +1,61 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useCallback } from "react";
 import {
   computeVisibilityPolygon,
   circleClip,
   type Wall,
 } from "../../utils/Raycasting";
 import { useGameStore } from "../../store/gameStore";
+import { useMeasurementStore } from "../../store/MeasurementStore";
+import type { FogRegion, VisibilityMode } from "../../hooks/useFog";
 
 interface FogLayerProps {
   walls: Wall[];
   isGM: boolean;
-  fogEnabled: boolean;
   currentUserId: string;
   mapWidth: number;
   mapHeight: number;
-  revealedRegions: { cx: number; cy: number; radius: number }[];
+  visibilityMode: VisibilityMode;
+  revealedRegions: FogRegion[];
+  brushPos?: { x: number; y: number } | null;
+  brushRadius?: number;
+  isFogTool?: boolean;
+  zoom: number;
+  cameraX: number;
+  cameraY: number;
 }
 
-const DEFAULT_VISION_RADIUS = 840;
+// Convert feet to world units using current scene's gridSize and feetPerSquare scale
+function feetToWorld(
+  feet: number,
+  gridSize: number,
+  feetPerSquare: number,
+): number {
+  return (feet / feetPerSquare) * gridSize;
+}
 
 export default function FogLayer({
   walls,
   isGM,
-  fogEnabled,
   currentUserId,
   mapWidth,
   mapHeight,
+  visibilityMode,
   revealedRegions,
+  brushPos,
+  brushRadius = 120,
+  isFogTool = false,
+  zoom,
+  cameraX,
+  cameraY,
 }: FogLayerProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const tokens = useGameStore((s) => s.tokens);
-  const zoom = useGameStore((s) => s.zoom);
-  const cameraX = useGameStore((s) => s.cameraX);
-  const cameraY = useGameStore((s) => s.cameraY);
+  const gridSize = useGameStore((s) => s.sceneSettings.gridSize);
+  const feetPerSquare = useMeasurementStore((s) => s.feetPerSquare);
+  // Default vision: 60ft in world units. Scales correctly with any gridSize/scale.
+  const defaultVisionRadius = feetToWorld(60, gridSize, feetPerSquare);
 
-  useEffect(() => {
+  const drawFog = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
@@ -43,111 +65,176 @@ export default function FogLayer({
     if (!container) return;
     const W = container.offsetWidth;
     const H = container.offsetHeight;
-    canvas.width = W;
-    canvas.height = H;
 
-    // Always clear — if fog is off just leave it transparent
-    ctx.clearRect(0, 0, W, H);
-    if (!fogEnabled) return;
-
-    // ── Draw onto an offscreen canvas in world space ──────────────────────────
-    // We use an offscreen canvas so destination-out compositing works correctly.
-    // The offscreen canvas is in world coordinates; we blit it to screen after.
-    const off = document.createElement("canvas");
-    off.width = W;
-    off.height = H;
-    const offCtx = off.getContext("2d")!;
-
-    // Transform to match Konva world group (same cameraX/Y and zoom)
-    offCtx.save();
-    offCtx.translate(cameraX, cameraY);
-    offCtx.scale(zoom, zoom);
-
-    // Step 1 — fill the entire map area with fog
-    offCtx.fillStyle = isGM ? "rgba(0,0,0,0.5)" : "rgba(0,0,0,1)";
-    offCtx.fillRect(0, 0, mapWidth, mapHeight);
-
-    // Step 2 — punch holes using destination-out
-    offCtx.globalCompositeOperation = "destination-out";
-
-    // GM brush-revealed regions
-    for (const region of revealedRegions) {
-      offCtx.beginPath();
-      offCtx.arc(region.cx, region.cy, region.radius, 0, Math.PI * 2);
-      offCtx.fillStyle = "rgba(0,0,0,1)";
-      offCtx.fill();
+    if (canvas.width !== W || canvas.height !== H) {
+      canvas.width = W;
+      canvas.height = H;
     }
 
-    // Determine which tokens grant vision
-    const visibleTokens = isGM
-      ? tokens.filter((t: any) => t.player_editable)
-      : tokens.filter(
-          (t: any) =>
-            t.player_editable && (t.owner_id === currentUserId || !t.owner_id),
-        );
+    ctx.clearRect(0, 0, W, H);
 
-    for (const token of visibleTokens) {
-      const ox = (token as any).x ?? 0;
-      const oy = (token as any).y ?? 0;
-      const visionRadius =
-        (token as any).stats_json?.vision_radius ?? DEFAULT_VISION_RADIUS;
-
-      // Compute visibility polygon (raycasting against walls)
-      let visPoints = computeVisibilityPolygon(ox, oy, walls, visionRadius, {
-        x: 0,
-        y: 0,
-        w: mapWidth,
-        h: mapHeight,
-      });
-
-      // Fall back to a plain circle if no walls / degenerate polygon
-      if (visPoints.length < 3) {
-        visPoints = circleClip([], ox, oy, visionRadius);
-      }
-      if (visPoints.length < 3) continue;
+    // ── Fog rendering — active whenever mode is not "none" ────────────────────
+    if (visibilityMode !== "none") {
+      const off = document.createElement("canvas");
+      off.width = W;
+      off.height = H;
+      const offCtx = off.getContext("2d")!;
 
       offCtx.save();
+      offCtx.translate(cameraX, cameraY);
+      offCtx.scale(zoom, zoom);
 
-      // Clip to the vision circle so we get a hard circular edge
-      offCtx.beginPath();
-      offCtx.arc(ox, oy, visionRadius, 0, Math.PI * 2);
-      offCtx.clip();
-
-      // Fill the visibility polygon to punch through the fog
-      offCtx.beginPath();
-      offCtx.moveTo(visPoints[0].x, visPoints[0].y);
-      for (let i = 1; i < visPoints.length; i++) {
-        offCtx.lineTo(visPoints[i].x, visPoints[i].y);
-      }
-      offCtx.closePath();
+      // Fill map with solid fog
       offCtx.fillStyle = "rgba(0,0,0,1)";
-      offCtx.fill();
+      offCtx.fillRect(0, 0, mapWidth, mapHeight);
+
+      // ── Punch holes: GM-painted revealed regions ───────────────────────────
+      // Applied in both "fog" and "lighting" modes so GM pre-reveals stack
+      if (revealedRegions.length > 0) {
+        offCtx.globalCompositeOperation = "destination-out";
+        for (const region of revealedRegions) {
+          const gradient = offCtx.createRadialGradient(
+            region.cx,
+            region.cy,
+            region.radius * 0.4,
+            region.cx,
+            region.cy,
+            region.radius,
+          );
+          gradient.addColorStop(0, "rgba(0,0,0,1)");
+          gradient.addColorStop(1, "rgba(0,0,0,0)");
+          offCtx.beginPath();
+          offCtx.arc(region.cx, region.cy, region.radius, 0, Math.PI * 2);
+          offCtx.fillStyle = gradient;
+          offCtx.fill();
+        }
+      }
+
+      // ── Punch holes: token vision (lighting mode only) ────────────────────
+      if (visibilityMode === "lighting") {
+        offCtx.globalCompositeOperation = "destination-out";
+
+        const visibleTokens = isGM
+          ? tokens.filter((t) => t.player_editable)
+          : tokens.filter(
+              (t) =>
+                t.player_editable &&
+                (t.owner_id === currentUserId || !t.owner_id),
+            );
+
+        for (const token of visibleTokens) {
+          const ox = token.x ?? 0;
+          const oy = token.y ?? 0;
+          // vision_radius is stored in world units (px).
+          // If not set, default to 60ft expressed in world units.
+          // darkvision is stored in feet and converted using current scale.
+          const manualRadius =
+            token.stats_json?.vision_radius != null
+              ? token.stats_json.vision_radius
+              : defaultVisionRadius;
+          const darkvisionFt = token.stats_json?.darkvision ?? 0;
+          const darkvisionWorld =
+            darkvisionFt > 0
+              ? feetToWorld(darkvisionFt, gridSize, feetPerSquare)
+              : 0;
+          const visionRadius = Math.max(manualRadius, darkvisionWorld);
+
+          let visPoints = computeVisibilityPolygon(
+            ox,
+            oy,
+            walls,
+            visionRadius,
+            {
+              x: 0,
+              y: 0,
+              w: mapWidth,
+              h: mapHeight,
+            },
+          );
+
+          if (visPoints.length < 3)
+            visPoints = circleClip([], ox, oy, visionRadius);
+          if (visPoints.length < 3) continue;
+
+          offCtx.save();
+          offCtx.beginPath();
+          offCtx.arc(ox, oy, visionRadius, 0, Math.PI * 2);
+          offCtx.clip();
+
+          const vGradient = offCtx.createRadialGradient(
+            ox,
+            oy,
+            visionRadius * 0.75,
+            ox,
+            oy,
+            visionRadius,
+          );
+          vGradient.addColorStop(0, "rgba(0,0,0,1)");
+          vGradient.addColorStop(1, "rgba(0,0,0,0)");
+
+          offCtx.beginPath();
+          offCtx.moveTo(visPoints[0].x, visPoints[0].y);
+          for (let i = 1; i < visPoints.length; i++)
+            offCtx.lineTo(visPoints[i].x, visPoints[i].y);
+          offCtx.closePath();
+          offCtx.fillStyle = vGradient;
+          offCtx.fill();
+          offCtx.restore();
+        }
+      }
 
       offCtx.restore();
+
+      // GMs see fog at reduced opacity so the map is still visible underneath
+      ctx.save();
+      ctx.globalAlpha = isGM ? 0.45 : 1.0;
+      ctx.drawImage(off, 0, 0);
+      ctx.restore();
     }
 
-    offCtx.restore(); // restore world transform
+    // ── GM brush cursor preview ────────────────────────────────────────────────
+    if (isGM && isFogTool && brushPos) {
+      const sx = brushPos.x * zoom + cameraX;
+      const sy = brushPos.y * zoom + cameraY;
+      const sr = brushRadius * zoom;
 
-    // ── Blit offscreen fog onto the screen canvas ─────────────────────────────
-    // GM gets a semi-transparent overlay so they can still see the map.
-    // Players get a nearly-opaque overlay.
-    ctx.save();
-    ctx.globalAlpha = isGM ? 0.55 : 1.0;
-    ctx.drawImage(off, 0, 0);
-    ctx.restore();
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(sx, sy, sr, 0, Math.PI * 2);
+      ctx.strokeStyle = "rgba(255,255,255,0.6)";
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([4, 4]);
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.arc(sx, sy, 3, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(255,255,255,0.9)";
+      ctx.fill();
+      ctx.restore();
+    }
   }, [
-    fogEnabled,
-    isGM,
-    walls,
-    tokens,
-    currentUserId,
-    mapWidth,
-    mapHeight,
     revealedRegions,
+    tokens,
+    walls,
     zoom,
     cameraX,
     cameraY,
+    visibilityMode,
+    isGM,
+    currentUserId,
+    mapWidth,
+    mapHeight,
+    brushPos,
+    brushRadius,
+    isFogTool,
+    gridSize,
+    feetPerSquare,
+    defaultVisionRadius,
   ]);
+
+  useEffect(() => {
+    drawFog();
+  }, [drawFog]);
 
   return (
     <canvas

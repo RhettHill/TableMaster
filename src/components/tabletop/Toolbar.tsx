@@ -1,5 +1,7 @@
 import type { ActiveTool } from "../../types/Types";
+import type { VisibilityMode } from "../../hooks/useFog";
 import { useMeasurementStore, SnapMode } from "../../store/MeasurementStore";
+import VisionRadiusControl from "./visionRadiusContol";
 
 interface ToolbarProps {
   activeTool: ActiveTool;
@@ -10,6 +12,20 @@ interface ToolbarProps {
   onDiceToggle: () => void;
   onOpenSheet: () => void;
   gmPanelOpen: boolean;
+  // Vision control (players only, shown when lighting mode is active)
+  visibilityMode?: VisibilityMode;
+  currentUserId?: string;
+  onEditStats?: (
+    id: string,
+    stats: {
+      hp: number;
+      maxHp: number;
+      ac: number;
+      showStats: boolean;
+      vision_radius: number;
+      darkvision: number;
+    },
+  ) => void;
 }
 
 function ToolButton({
@@ -136,6 +152,9 @@ export default function Toolbar({
   onDiceToggle,
   onOpenSheet,
   gmPanelOpen,
+  visibilityMode,
+  currentUserId,
+  onEditStats,
 }: ToolbarProps) {
   const snapMode = useMeasurementStore((s) => s.snapMode);
   const setSnapMode = useMeasurementStore((s) => s.setSnapMode);
@@ -146,6 +165,9 @@ export default function Toolbar({
 
   const toggleSnap = () =>
     setSnapMode(snapMode === "center" ? "corner" : "center");
+
+  const showVisionControl =
+    !isGM && visibilityMode === "lighting" && currentUserId && onEditStats;
 
   return (
     <div className="pointer-events-none h-full flex items-center">
@@ -236,6 +258,17 @@ export default function Toolbar({
           />
         )}
 
+        {/* ── Vision radius (players only, when lighting mode is on) ── */}
+        {showVisionControl && (
+          <>
+            <Divider />
+            <VisionRadiusControl
+              currentUserId={currentUserId!}
+              onEditStats={onEditStats!}
+            />
+          </>
+        )}
+
         {/* ── GM-only tools ── */}
         {isGM && (
           <>
@@ -251,6 +284,12 @@ export default function Toolbar({
               label="Draw Door — click to place door segments"
               active={activeTool === "door"}
               onClick={() => onToolChange("door")}
+            />
+            <ToolButton
+              icon="🗑"
+              label="Erase Walls/Doors"
+              active={activeTool === "erase"}
+              onClick={() => onToolChange("erase")}
             />
             <Divider />
             <ToolButton

@@ -4,6 +4,8 @@ import { useGameStore } from "../store/gameStore";
 import type { Token } from "../types/Types";
 import type { Scene } from "./useScenes";
 import type { MeasureState } from "../components/tabletop/MeasureLayer";
+import type { FogBroadcastEvent } from "./useFog";
+import type { WallBroadcastEvent } from "./useWalls";
 
 export interface PresenceUser {
   userId: string;
@@ -12,11 +14,20 @@ export interface PresenceUser {
   isGM: boolean;
 }
 
-// A remote user's active measurement, augmented with who drew it
 export interface RemoteMeasure extends MeasureState {
   userId: string;
   displayName: string;
   color: string;
+}
+
+export interface RemotePing {
+  id: string;
+  x: number;
+  y: number;
+  color: string;
+  label: string;
+  senderId: string;
+  timestamp: number;
 }
 
 interface Options {
@@ -26,17 +37,21 @@ interface Options {
   activeSceneId: string | null;
   onSceneSwitch: (scene: Scene) => Promise<void>;
   onPresenceChange: (users: PresenceUser[]) => void;
+  onFogBroadcast?: (event: FogBroadcastEvent) => void;
+  onFogSceneUpdate?: (updated: { visibility_mode?: string }) => void;
+  onSceneSettingsChange?: (scene: Scene) => void;
+  onWallBroadcast?: (event: WallBroadcastEvent) => void;
+  onPing?: (ping: RemotePing) => void;
 }
 
-// Deterministic colour per userId so each player's measure has a consistent tint
 function userColor(userId: string): string {
   const palette = [
-    "rgba(99,179,237,0.85)", // sky
-    "rgba(154,230,180,0.85)", // green
-    "rgba(246,173,85,0.85)", // orange
-    "rgba(252,129,129,0.85)", // red
-    "rgba(183,148,246,0.85)", // purple
-    "rgba(237,100,166,0.85)", // pink
+    "rgba(99,179,237,0.85)",
+    "rgba(154,230,180,0.85)",
+    "rgba(246,173,85,0.85)",
+    "rgba(252,129,129,0.85)",
+    "rgba(183,148,246,0.85)",
+    "rgba(237,100,166,0.85)",
   ];
   let hash = 0;
   for (let i = 0; i < userId.length; i++)
@@ -51,44 +66,80 @@ export function useRealtimeGame({
   activeSceneId,
   onSceneSwitch,
   onPresenceChange,
+  onFogBroadcast,
+  onFogSceneUpdate,
+  onSceneSettingsChange,
+  onWallBroadcast,
+  onPing,
 }: Options) {
   const storeAddToken = useGameStore((s) => s.addToken);
   const storeUpdateToken = useGameStore((s) => s.updateToken);
   const storeRemoveToken = useGameStore((s) => s.removeToken);
   const setMap = useGameStore((s) => s.setMap);
 
-  // Remote measurements from other users
   const [remoteMeasures, setRemoteMeasures] = useState<
     Map<string, RemoteMeasure>
   >(new Map());
 
+  // ── Refs ──────────────────────────────────────────────────────────────────────
+  // All callbacks kept in refs so the channel useEffect never needs to re-run
+  // when they change (avoids unsubscribe/resubscribe on every render).
   const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
+  const subscribedRef = useRef(false);
   const activeSceneRef = useRef(activeSceneId);
-  const onSceneSwitchRef = useRef(onSceneSwitch);
   const isGMRef = useRef(isGM);
+  const onSceneSwitchRef = useRef(onSceneSwitch);
+  const onPresenceChangeRef = useRef(onPresenceChange);
+  const onFogBroadcastRef = useRef(onFogBroadcast);
+  const onFogSceneUpdateRef = useRef(onFogSceneUpdate);
+  const onSceneSettingsChangeRef = useRef(onSceneSettingsChange);
+  const onWallBroadcastRef = useRef(onWallBroadcast);
+  const onPingRef = useRef(onPing);
+  const presenceNamesRef = useRef<Map<string, string>>(new Map());
 
   useEffect(() => {
     activeSceneRef.current = activeSceneId;
   }, [activeSceneId]);
   useEffect(() => {
+    isGMRef.current = isGM;
+  }, [isGM]);
+  useEffect(() => {
     onSceneSwitchRef.current = onSceneSwitch;
   }, [onSceneSwitch]);
   useEffect(() => {
-    isGMRef.current = isGM;
-  }, [isGM]);
+    onPresenceChangeRef.current = onPresenceChange;
+  }, [onPresenceChange]);
+  useEffect(() => {
+    onFogBroadcastRef.current = onFogBroadcast;
+  }, [onFogBroadcast]);
+  useEffect(() => {
+    onFogSceneUpdateRef.current = onFogSceneUpdate;
+  }, [onFogSceneUpdate]);
+  useEffect(() => {
+    onSceneSettingsChangeRef.current = onSceneSettingsChange;
+  }, [onSceneSettingsChange]);
+  useEffect(() => {
+    onWallBroadcastRef.current = onWallBroadcast;
+  }, [onWallBroadcast]);
+  useEffect(() => {
+    onPingRef.current = onPing;
+  }, [onPing]);
 
-  // Presence display names — kept in a ref for the measure label lookup
-  const presenceNamesRef = useRef<Map<string, string>>(new Map());
-
+  // ── Channel setup — runs once per gameId+userId ───────────────────────────────
   useEffect(() => {
     if (!gameId || !userId) return;
 
+    subscribedRef.current = false;
+
     const channel = supabase.channel(`game-${gameId}`, {
-      config: { presence: { key: userId } },
+      config: {
+        presence: { key: userId },
+        broadcast: { ack: false },
+      },
     });
     channelRef.current = channel;
 
-    // ── Token changes ─────────────────────────────────────────────────────
+    // ── Token INSERT ────────────────────────────────────────────────────────────
     channel.on(
       "postgres_changes",
       { event: "INSERT", schema: "public", table: "tokens" },
@@ -100,34 +151,14 @@ export function useRealtimeGame({
       },
     );
 
+    // ── Token UPDATE (non-position fields — position comes via broadcast) ───────
     channel.on(
       "postgres_changes",
       { event: "UPDATE", schema: "public", table: "tokens" },
       (payload) => {
         const token = payload.new as Token;
         if (token.scene_id !== activeSceneRef.current) return;
-
-        const isOwnToken = (token as any).owner_id === userId;
-
-        if (isOwnToken) {
-          // For own tokens, only sync fields that can be changed by others
-          // (stats_json updated by sheet save, visibility/editable by GM).
-          // Skip position — we already have the optimistic local update.
-          storeUpdateToken(token.id, {
-            visible: token.visible,
-            player_editable: token.player_editable,
-            stats_json: token.stats_json,
-            token_size: token.token_size,
-            name: token.name,
-          });
-          return;
-        }
-
         storeUpdateToken(token.id, {
-          x: token.x,
-          y: token.y,
-          rotation: token.rotation,
-          scale: token.scale,
           visible: token.visible,
           player_editable: token.player_editable,
           stats_json: token.stats_json,
@@ -138,6 +169,7 @@ export function useRealtimeGame({
       },
     );
 
+    // ── Token DELETE ────────────────────────────────────────────────────────────
     channel.on(
       "postgres_changes",
       { event: "DELETE", schema: "public", table: "tokens" },
@@ -147,7 +179,19 @@ export function useRealtimeGame({
       },
     );
 
-    // ── Scene changes ─────────────────────────────────────────────────────
+    // ── Token position broadcast ────────────────────────────────────────────────
+    channel.on("broadcast", { event: "token_move" }, ({ payload }) => {
+      const { senderId, id, x, y } = payload as {
+        senderId: string;
+        id: string;
+        x: number;
+        y: number;
+      };
+      if (senderId === userId) return;
+      storeUpdateToken(id, { x, y });
+    });
+
+    // ── Scene changes ───────────────────────────────────────────────────────────
     channel.on(
       "postgres_changes",
       {
@@ -157,9 +201,22 @@ export function useRealtimeGame({
         filter: `game_id=eq.${gameId}`,
       },
       async (payload) => {
-        const scene = payload.new as Scene;
-        if (scene.id === activeSceneRef.current && scene.map_url)
-          setMap(scene.map_url);
+        const scene = payload.new as Scene & { visibility_mode?: string };
+
+        if (scene.id === activeSceneRef.current) {
+          if (scene.map_url) setMap(scene.map_url);
+
+          if (!isGMRef.current) {
+            onSceneSettingsChangeRef.current?.(scene);
+          }
+
+          if (scene.visibility_mode !== undefined) {
+            onFogSceneUpdateRef.current?.({
+              visibility_mode: scene.visibility_mode,
+            });
+          }
+        }
+
         if (
           scene.active &&
           scene.id !== activeSceneRef.current &&
@@ -170,17 +227,15 @@ export function useRealtimeGame({
       },
     );
 
-    // ── Measurement broadcast ─────────────────────────────────────────────
+    // ── Measurement broadcast ───────────────────────────────────────────────────
     channel.on("broadcast", { event: "measure_update" }, ({ payload }) => {
       const { senderId, measure } = payload as {
         senderId: string;
         measure: MeasureState;
       };
-      if (senderId === userId) return; // ignore own echoes
-
+      if (senderId === userId) return;
       const displayName = presenceNamesRef.current.get(senderId) ?? "Player";
       const color = userColor(senderId);
-
       setRemoteMeasures((prev) => {
         const next = new Map(prev);
         next.set(senderId, {
@@ -203,14 +258,30 @@ export function useRealtimeGame({
       });
     });
 
-    // ── Presence ──────────────────────────────────────────────────────────
+    // ── Fog broadcast ───────────────────────────────────────────────────────────
+    channel.on("broadcast", { event: "fog" }, ({ payload }) => {
+      onFogBroadcastRef.current?.(payload as FogBroadcastEvent);
+    });
+
+    // ── Wall broadcast ──────────────────────────────────────────────────────────
+    channel.on("broadcast", { event: "wall" }, ({ payload }) => {
+      onWallBroadcastRef.current?.(payload as WallBroadcastEvent);
+    });
+
+    // ── Ping broadcast ──────────────────────────────────────────────────────────
+    channel.on("broadcast", { event: "ping" }, ({ payload }) => {
+      const p = payload as RemotePing;
+      if (p.senderId === userId) return;
+      onPingRef.current?.(p);
+    });
+
+    // ── Presence ────────────────────────────────────────────────────────────────
     channel.on("presence", { event: "sync" }, () => {
       const state = channel.presenceState<{
         displayName: string;
         avatarUrl: string | null;
         isGM: boolean;
       }>();
-
       const users: PresenceUser[] = Object.entries(state).map(([uid, arr]) => {
         const p = arr[0];
         presenceNamesRef.current.set(uid, p?.displayName ?? "Player");
@@ -221,13 +292,13 @@ export function useRealtimeGame({
           isGM: p?.isGM ?? false,
         };
       });
-
-      onPresenceChange(users);
+      onPresenceChangeRef.current(users);
     });
 
-    // Subscribe and announce
+    // ── Subscribe + presence track ──────────────────────────────────────────────
     channel.subscribe(async (status) => {
       if (status !== "SUBSCRIBED") return;
+      subscribedRef.current = true;
       const { data: profile } = await supabase
         .from("profiles")
         .select("display_name, username, avatar_url")
@@ -241,13 +312,82 @@ export function useRealtimeGame({
     });
 
     return () => {
+      subscribedRef.current = false;
       channel.untrack();
       channel.unsubscribe();
       channelRef.current = null;
     };
-  }, [gameId, userId]);
+  }, [gameId, userId]); // intentionally minimal — all callbacks go through refs
 
-  // ── Broadcast helpers — called by Tabletop on mouse move / up ─────────────
+  // ── Outbound send helpers ─────────────────────────────────────────────────────
+  // All use channelRef so they work regardless of when the channel subscribes.
+
+  const sendFog = useCallback((event: FogBroadcastEvent) => {
+    const send = () =>
+      channelRef.current?.send({
+        type: "broadcast",
+        event: "fog",
+        payload: event,
+      });
+
+    if (subscribedRef.current) {
+      send();
+      return;
+    }
+
+    // Retry until subscribed (handles fast first paints)
+    let attempts = 0;
+    const interval = setInterval(() => {
+      attempts++;
+      if (subscribedRef.current) {
+        clearInterval(interval);
+        send();
+      } else if (attempts > 60) {
+        clearInterval(interval);
+      }
+    }, 50);
+  }, []);
+
+  const sendWall = useCallback((event: WallBroadcastEvent) => {
+    channelRef.current?.send({
+      type: "broadcast",
+      event: "wall",
+      payload: event,
+    });
+  }, []);
+
+  const sendTokenMove = useCallback(
+    (id: string, x: number, y: number) => {
+      channelRef.current?.send({
+        type: "broadcast",
+        event: "token_move",
+        payload: { senderId: userId, id, x, y },
+      });
+    },
+    [userId],
+  );
+
+  const sendPing = useCallback(
+    (x: number, y: number, label: string, color: string) => {
+      const ping: RemotePing = {
+        id: `ping-${Date.now()}-${Math.random()}`,
+        x,
+        y,
+        color,
+        label,
+        senderId: userId,
+        timestamp: Date.now(),
+      };
+      channelRef.current?.send({
+        type: "broadcast",
+        event: "ping",
+        payload: ping,
+      });
+      return ping;
+    },
+    [userId],
+  );
+
   const broadcastMeasure = useCallback(
     (measure: MeasureState) => {
       channelRef.current?.send({
@@ -265,7 +405,6 @@ export function useRealtimeGame({
       event: "measure_clear",
       payload: { senderId: userId },
     });
-    // Also clear own remote entry just in case
     setRemoteMeasures((prev) => {
       const next = new Map(prev);
       next.delete(userId);
@@ -273,5 +412,13 @@ export function useRealtimeGame({
     });
   }, [userId]);
 
-  return { remoteMeasures, broadcastMeasure, broadcastClearMeasure };
+  return {
+    remoteMeasures,
+    broadcastMeasure,
+    broadcastClearMeasure,
+    sendFog,
+    sendTokenMove,
+    sendWall,
+    sendPing,
+  };
 }

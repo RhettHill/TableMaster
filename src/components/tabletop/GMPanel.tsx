@@ -11,6 +11,7 @@ import AssetPicker from "../AssetPicker";
 import { Asset } from "../../hooks/useAssets";
 import SettingsPanel from "./SettingsPanel";
 import NpcLibraryPanel from "./LibraryPanel";
+import type { VisibilityMode } from "../../hooks/useFog";
 
 interface GMPanelProps {
   open: boolean;
@@ -24,8 +25,13 @@ interface GMPanelProps {
   onClose: () => void;
   onOpenStatBlock: (id: string) => void;
   gameSystemSlug: string;
-  fogEnabled: boolean;
-  onToggleFog: (enabled: boolean) => void;
+  onClearFog?: () => void;
+  visibilityMode: VisibilityMode;
+  onSetVisibilityMode: (mode: VisibilityMode) => void;
+  // Token panel management
+  onDeleteToken: (id: string) => void;
+  onRenameToken: (id: string, name: string) => void;
+  onLocateToken: (id: string) => void; // pans camera to token
 }
 
 type Tab = "scenes" | "tokens" | "npcs" | "map" | "settings";
@@ -66,13 +72,20 @@ export default function GMPanel({
   onClose,
   onOpenStatBlock,
   gameSystemSlug,
-  fogEnabled,
-  onToggleFog,
+  onClearFog,
+  visibilityMode,
+  onSetVisibilityMode,
+  onDeleteToken,
+  onRenameToken,
+  onLocateToken,
 }: GMPanelProps) {
   const [activeTab, setActiveTab] = useState<Tab>("scenes");
   const [picker, setPicker] = useState<null | "map" | "token">(null);
   const [uploading, setUploading] = useState(false);
   const [newSceneName, setNewSceneName] = useState("");
+  const [tokenSearch, setTokenSearch] = useState("");
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
 
   const setMap = useGameStore((s) => s.setMap);
   const tokens = useGameStore((s) => s.tokens);
@@ -262,7 +275,7 @@ export default function GMPanel({
 
           {/* ── TOKENS ────────────────────────────────────────────────────── */}
           {activeTab === "tokens" && (
-            <div className="flex flex-col gap-3 p-4">
+            <div className="flex flex-col gap-2 p-3">
               {!activeSceneId && (
                 <p className="text-amber-400/60 text-xs bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2">
                   Switch to a scene first
@@ -271,40 +284,154 @@ export default function GMPanel({
               <button
                 onClick={() => setPicker("token")}
                 disabled={!activeSceneId}
-                className="w-full py-2.5 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 hover:border-white/20 text-white/60 hover:text-white/90 text-sm transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                className="w-full py-2 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 hover:border-white/20 text-white/60 hover:text-white/90 text-sm transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
               >
                 <span className="text-base">🪙</span> Add Token from Library
               </button>
 
               {tokens.length > 0 && (
-                <div className="flex flex-col gap-1 mt-1">
-                  <p className="text-[10px] text-white/30 uppercase tracking-widest mb-1">
-                    On map ({tokens.length})
-                  </p>
-                  {tokens.map((token) => (
-                    <div
-                      key={token.id}
-                      className="flex items-center gap-2 px-3 py-2 rounded-lg bg-white/4 border border-white/8 text-sm text-white/60"
-                    >
-                      {token.image_url ? (
-                        <img
-                          src={token.image_url}
-                          className="w-6 h-6 rounded-full object-cover flex-shrink-0"
-                        />
-                      ) : (
-                        <div className="w-6 h-6 rounded-full bg-white/10 flex items-center justify-center text-xs flex-shrink-0">
-                          {token.name?.charAt(0)}
-                        </div>
+                <>
+                  {/* Search */}
+                  <input
+                    type="text"
+                    value={tokenSearch}
+                    onChange={(e) => setTokenSearch(e.target.value)}
+                    placeholder={`Search ${tokens.length} token${tokens.length !== 1 ? "s" : ""}…`}
+                    className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs
+                      text-white placeholder-white/25 focus:outline-none focus:border-amber-500/50 transition-colors"
+                  />
+
+                  <div className="flex flex-col gap-0.5">
+                    {tokens
+                      .filter(
+                        (t) =>
+                          !tokenSearch ||
+                          t.name
+                            ?.toLowerCase()
+                            .includes(tokenSearch.toLowerCase()),
+                      )
+                      .map((token) => {
+                        const isRenaming = renamingId === token.id;
+                        return (
+                          <div
+                            key={token.id}
+                            className="group flex items-center gap-2 px-2 py-1.5 rounded-lg
+                              bg-white/3 hover:bg-white/6 border border-white/6 transition-colors"
+                          >
+                            {/* Avatar */}
+                            {token.image_url ? (
+                              <img
+                                src={token.image_url}
+                                className="w-7 h-7 rounded-full object-cover flex-shrink-0"
+                              />
+                            ) : (
+                              <div className="w-7 h-7 rounded-full bg-white/10 flex items-center justify-center text-xs flex-shrink-0 text-white/40">
+                                {token.name?.charAt(0) ?? "?"}
+                              </div>
+                            )}
+
+                            {/* Name / rename input */}
+                            {isRenaming ? (
+                              <input
+                                autoFocus
+                                value={renameValue}
+                                onChange={(e) => setRenameValue(e.target.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter") {
+                                    onRenameToken(token.id, renameValue);
+                                    setRenamingId(null);
+                                  }
+                                  if (e.key === "Escape") setRenamingId(null);
+                                }}
+                                onBlur={() => {
+                                  if (renameValue.trim())
+                                    onRenameToken(token.id, renameValue);
+                                  setRenamingId(null);
+                                }}
+                                className="flex-1 min-w-0 bg-white/10 border border-amber-500/40 rounded px-2 py-0.5
+                                  text-xs text-white focus:outline-none"
+                              />
+                            ) : (
+                              <span
+                                className="flex-1 min-w-0 text-xs text-white/70 truncate cursor-pointer hover:text-white/90"
+                                onDoubleClick={() => {
+                                  setRenamingId(token.id);
+                                  setRenameValue(token.name ?? "");
+                                }}
+                                title="Double-click to rename"
+                              >
+                                {token.name}
+                              </span>
+                            )}
+
+                            {/* Visibility dot */}
+                            <span
+                              className={`text-[10px] flex-shrink-0 ${token.visible ? "text-green-400/60" : "text-white/20"}`}
+                            >
+                              {token.visible ? "●" : "○"}
+                            </span>
+
+                            {/* Action buttons — show on hover */}
+                            <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
+                              {/* Locate (pan to) */}
+                              <button
+                                title="Pan to token"
+                                onClick={() => onLocateToken(token.id)}
+                                className="w-6 h-6 rounded flex items-center justify-center
+                                  text-white/30 hover:text-sky-400 hover:bg-sky-500/10 transition-colors text-xs"
+                              >
+                                ◎
+                              </button>
+                              {/* Rename */}
+                              <button
+                                title="Rename"
+                                onClick={() => {
+                                  setRenamingId(token.id);
+                                  setRenameValue(token.name ?? "");
+                                }}
+                                className="w-6 h-6 rounded flex items-center justify-center
+                                  text-white/30 hover:text-amber-400 hover:bg-amber-500/10 transition-colors text-xs"
+                              >
+                                ✎
+                              </button>
+                              {/* Delete */}
+                              <button
+                                title="Delete token"
+                                onClick={() => {
+                                  if (
+                                    window.confirm(`Delete "${token.name}"?`)
+                                  ) {
+                                    onDeleteToken(token.id);
+                                  }
+                                }}
+                                className="w-6 h-6 rounded flex items-center justify-center
+                                  text-white/30 hover:text-red-400 hover:bg-red-500/10 transition-colors text-xs"
+                              >
+                                ✕
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+
+                    {tokenSearch &&
+                      tokens.filter((t) =>
+                        t.name
+                          ?.toLowerCase()
+                          .includes(tokenSearch.toLowerCase()),
+                      ).length === 0 && (
+                        <p className="text-white/25 text-xs text-center py-3">
+                          No tokens match "{tokenSearch}"
+                        </p>
                       )}
-                      <span className="truncate flex-1">{token.name}</span>
-                      <span
-                        className={`text-xs ${token.visible ? "text-green-400/60" : "text-white/20"}`}
-                      >
-                        {token.visible ? "●" : "○"}
-                      </span>
-                    </div>
-                  ))}
-                </div>
+                  </div>
+                </>
+              )}
+
+              {tokens.length === 0 && activeSceneId && (
+                <p className="text-white/20 text-xs text-center py-4">
+                  No tokens on this scene
+                </p>
               )}
             </div>
           )}
@@ -340,42 +467,15 @@ export default function GMPanel({
 
           {/* ── SETTINGS ──────────────────────────────────────────────────── */}
           {activeTab === "settings" && (
-            <div className="p-4 flex flex-col gap-4">
-              {/* Fog of war toggle */}
-              <div className="flex items-center justify-between px-1 mb-4">
-                <div>
-                  <p className="text-white/80 text-sm font-semibold">
-                    Fog of War
-                  </p>
-                  <p className="text-white/30 text-[10px]">
-                    Hides map from players based on token vision
-                  </p>
-                </div>
-                <button
-                  onClick={() => onToggleFog(!fogEnabled)}
-                  className={`w-10 h-5 rounded-full border transition-all relative ${
-                    fogEnabled
-                      ? "bg-amber-500/40 border-amber-500/60"
-                      : "bg-white/5 border-white/15"
-                  }`}
-                >
-                  <span
-                    className={`absolute top-0.5 w-4 h-4 rounded-full transition-all ${
-                      fogEnabled
-                        ? "left-5 bg-amber-400"
-                        : "left-0.5 bg-white/30"
-                    }`}
-                  />
-                </button>
-              </div>
-
-              <SettingsPanel
-                gameId={gameId}
-                activeSceneId={activeSceneId}
-                onSceneSettingChange={onSaveSceneSettings}
-                onGameSettingChange={onSaveGameSettings}
-              />
-            </div>
+            <SettingsPanel
+              gameId={gameId}
+              activeSceneId={activeSceneId}
+              onSceneSettingChange={onSaveSceneSettings}
+              onGameSettingChange={onSaveGameSettings}
+              onClearFog={onClearFog}
+              visibilityMode={visibilityMode}
+              onSetVisibilityMode={onSetVisibilityMode}
+            />
           )}
         </div>
       </div>

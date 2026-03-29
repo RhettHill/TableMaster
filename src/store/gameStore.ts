@@ -1,5 +1,5 @@
 import { create } from "zustand"
-import { Token } from "../types/Types"
+import { Token, VisibilityMode } from "../types/Types"
 
 export interface SceneSettings {
   gridSize: number
@@ -44,6 +44,7 @@ interface GameState {
   cameraY: number
   sceneSettings: SceneSettings
   gameSettings: GameSettings
+  visibilityMode: VisibilityMode// default
   
 
   setTokens: (tokens: Token[]) => void
@@ -69,9 +70,12 @@ export const useGameStore = create<GameState>((set) => ({
   sceneSettings: DEFAULT_SCENE_SETTINGS,
   gameSettings: DEFAULT_GAME_SETTINGS,
 
+  // NEW visibility mode state
+  visibilityMode: "fog",
+  setVisibilityMode: (mode:any) => set({ visibilityMode: mode }),
+
   setTokens: (tokens) => set({ tokens }),
-  addToken: (token) =>
-    set((state) => ({ tokens: [...state.tokens, token] })),
+  addToken: (token) => set((state) => ({ tokens: [...state.tokens, token] })),
   moveToken: (id, x, y) =>
     set((state) => ({
       tokens: state.tokens.map((t) => (t.id === id ? { ...t, x, y } : t)),

@@ -2,13 +2,16 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Token, TokenStats } from "../../types/Types";
 import type { GridType } from "../../utils/GridUtils";
+import AuraEditor, { Aura } from "../AuraEditor";
 
 interface TokenContextMenuProps {
   token: Token;
   gridType: GridType;
   screenX: number;
   screenY: number;
-  isGM: boolean; // ← new: controls which options are shown
+  gridSize: number;
+  feetPerSquare: number;
+  isGM: boolean;
   onRename: (id: string, name: string) => void;
   onToggleVisibility: (id: string, visible: boolean) => void;
   onTogglePlayerEditable: (id: string, editable: boolean) => void;
@@ -20,14 +23,16 @@ interface TokenContextMenuProps {
       ac: number;
       showStats: boolean;
       vision_radius: number;
+      darkvision: number;
+      auras: Aura[];
     },
   ) => void;
   onSetTokenSize: (id: string, size: number) => void;
   onDelete: (id: string) => void;
   onOpenSheet: (id: string) => void;
-  onOpenStatBlock?: (id: string) => void; // open NPC stat block
-  onAssignStatBlock?: (id: string) => void; // GM: assign from library
-  hasStatBlock?: boolean; // token already has a stat block
+  onOpenStatBlock?: (id: string) => void;
+  onAssignStatBlock?: (id: string) => void;
+  hasStatBlock?: boolean;
   onClose: () => void;
 }
 
@@ -93,6 +98,8 @@ export default function TokenContextMenu({
   gridType,
   screenX,
   screenY,
+  gridSize,
+  feetPerSquare,
   isGM,
   onRename,
   onToggleVisibility,
@@ -115,11 +122,17 @@ export default function TokenContextMenu({
   const [maxHp, setMaxHp] = useState(stats?.maxHp ?? 10);
   const [ac, setAc] = useState(stats?.ac ?? 10);
   const [showStats, setShowStats] = useState(stats?.showStats ?? false);
+  const [vision_radius, setVisionRadius] = useState(stats?.vision_radius ?? 0);
+  const [darkvision, setDarkvision] = useState(stats?.darkvision ?? 0);
+  // Auras — safe extraction from stats_json (may be typed loosely)
+  const [auras, setAuras] = useState<Aura[]>(() => {
+    const raw = (stats as any)?.auras;
+    return Array.isArray(raw) ? raw : [];
+  });
 
   const [sizeInput, setSizeInput] = useState(token.token_size ?? 1);
   const [pos, setPos] = useState({ x: screenX, y: screenY });
 
-  // A player can only interact with tokens that are explicitly editable
   const canEdit = isGM || token.player_editable;
 
   useEffect(() => {
@@ -161,7 +174,15 @@ export default function TokenContextMenu({
   };
 
   const commitStats = () => {
-    onEditStats(token.id, { hp, maxHp, ac, showStats, vision_radius: 60 });
+    onEditStats(token.id, {
+      hp,
+      maxHp,
+      ac,
+      showStats,
+      vision_radius,
+      darkvision,
+      auras,
+    });
     onClose();
   };
 
@@ -178,11 +199,11 @@ export default function TokenContextMenu({
   return createPortal(
     <div
       ref={menuRef}
-      className="fixed z-[200] w-56 rounded-xl border border-white/12 bg-[#0f0f1c]/97 backdrop-blur-md shadow-2xl shadow-black/60 overflow-hidden"
+      className="fixed z-[200] w-64 rounded-xl border border-white/12 bg-[#0f0f1c]/97 backdrop-blur-md shadow-2xl shadow-black/60 overflow-hidden"
       style={{ left: pos.x, top: pos.y }}
       onContextMenu={(e) => e.preventDefault()}
     >
-      {/* ── Header ───────────────────────────────────────────────────────── */}
+      {/* ── Header ─────────────────────────────────────────────────────────── */}
       <div className="px-3 pt-3 pb-2 border-b border-white/8">
         <div className="flex items-center gap-2">
           {token.image_url ? (
@@ -220,8 +241,7 @@ export default function TokenContextMenu({
             </div>
           </div>
         </div>
-
-        {stats?.maxHp && (
+        {stats?.maxHp ? (
           <div className="mt-2 flex flex-col gap-1">
             <div className="flex justify-between text-[10px] text-white/40">
               <span>
@@ -231,10 +251,10 @@ export default function TokenContextMenu({
             </div>
             <HpBar hp={stats.hp ?? 0} maxHp={stats.maxHp} />
           </div>
-        )}
+        ) : null}
       </div>
 
-      {/* ── Rename mode ──────────────────────────────────────────────────── */}
+      {/* ── Rename mode ────────────────────────────────────────────────────── */}
       {mode === "rename" && (
         <div className="px-3 py-2.5 border-b border-white/8 flex flex-col gap-2">
           <input
@@ -265,9 +285,10 @@ export default function TokenContextMenu({
         </div>
       )}
 
-      {/* ── Stats mode ───────────────────────────────────────────────────── */}
+      {/* ── Stats mode ──────────────────────────────────────────────────────── */}
       {mode === "stats" && (
-        <div className="px-3 py-2.5 border-b border-white/8 flex flex-col gap-2">
+        <div className="px-3 py-2.5 border-b border-white/8 flex flex-col gap-2 max-h-[70vh] overflow-y-auto">
+          {/* HP / Max / AC */}
           <div className="grid grid-cols-3 gap-2">
             {[
               { label: "HP", value: hp, set: setHp, min: 0 },
@@ -290,7 +311,48 @@ export default function TokenContextMenu({
           </div>
           <HpBar hp={hp} maxHp={maxHp} />
 
-          {/* Show stats toggle — GM only, players can't toggle the bar display */}
+          {/* Vision radius (in world units) — shown as feet */}
+          {isGM && (
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] text-white/30 uppercase tracking-wider w-20 flex-shrink-0">
+                Vision
+              </span>
+              <input
+                type="number"
+                min={0}
+                step={5}
+                value={
+                  feetPerSquare > 0 && gridSize > 0
+                    ? Math.round((vision_radius / gridSize) * feetPerSquare)
+                    : vision_radius
+                }
+                onChange={(e) => {
+                  const ft = Number(e.target.value);
+                  setVisionRadius(
+                    feetPerSquare > 0 && gridSize > 0
+                      ? (ft / feetPerSquare) * gridSize
+                      : ft,
+                  );
+                }}
+                className="w-16 bg-white/5 border border-white/10 rounded px-2 py-0.5 text-xs text-white text-center
+                  focus:outline-none focus:border-amber-500/50 [appearance:textfield]
+                  [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+              />
+              <span className="text-[10px] text-white/30">ft</span>
+            </div>
+          )}
+
+          {/* Aura editor */}
+          <AuraEditor
+            auras={auras}
+            gridSize={gridSize}
+            feetPerSquare={feetPerSquare}
+            canEdit={canEdit}
+            onChange={setAuras}
+            tokenSize={token.scale}
+          />
+
+          {/* Show stats toggle — GM only */}
           {isGM && (
             <button
               onClick={() => setShowStats((v) => !v)}
@@ -318,11 +380,9 @@ export default function TokenContextMenu({
         </div>
       )}
 
-      {/* ── Menu items ───────────────────────────────────────────────────── */}
+      {/* ── Menu items ──────────────────────────────────────────────────────── */}
       {mode === null && (
         <div className="py-1">
-          {/* Character Sheet — player-controlled tokens only.
-               NPCs use stat blocks, not character sheets. */}
           {token.player_editable && (
             <MenuItem
               icon="📋"
@@ -333,8 +393,6 @@ export default function TokenContextMenu({
               }}
             />
           )}
-
-          {/* NPC Stat Block — GM only, non-player tokens only */}
           {isGM &&
             !token.player_editable &&
             hasStatBlock &&
@@ -358,7 +416,6 @@ export default function TokenContextMenu({
               }}
             />
           )}
-
           {canEdit && (
             <MenuItem
               icon="✏"
@@ -366,8 +423,6 @@ export default function TokenContextMenu({
               onClick={() => setMode("rename")}
             />
           )}
-
-          {/* Size slider — both GM and players on editable tokens */}
           {canEdit && (
             <div className="px-3 py-2 flex flex-col gap-1.5">
               <div className="flex items-center justify-between">
@@ -397,8 +452,6 @@ export default function TokenContextMenu({
               </div>
             </div>
           )}
-
-          {/* HP / AC — both GM and players on editable tokens */}
           {canEdit && (
             <MenuItem
               icon="❤"
@@ -407,8 +460,6 @@ export default function TokenContextMenu({
               right={stats?.showStats ? <TogglePill value={true} /> : undefined}
             />
           )}
-
-          {/* ── GM-only section ── */}
           {isGM && (
             <>
               <MenuItem
@@ -450,8 +501,6 @@ export default function TokenContextMenu({
               />
             </>
           )}
-
-          {/* If player has nothing they can do, show a note */}
           {!canEdit && (
             <p className="px-3 py-3 text-xs text-white/25 text-center">
               This token is GM controlled

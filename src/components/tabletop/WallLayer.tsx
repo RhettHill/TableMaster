@@ -1,9 +1,12 @@
 /**
- * WallLayer — renders wall segments only.
- * All mouse interaction is handled by Tabletop's Stage handlers
- * and passed in via props so the Stage-level events fire correctly.
+ * WallLayer — renders wall segments and handles door toggling.
+ *
+ * Door interaction rules:
+ * - Anyone (GM or player) can click a door to open/close it regardless of
+ *   which tool is active. Doors are interactive objects, not just GM tools.
+ * - Wall removal (shift+click) is handled upstream in Tabletop's Stage handler.
+ * - The hit area is intentionally wider than the visible line for easier clicking.
  */
-
 import { Layer, Line, Circle, Group } from "react-konva";
 import type { Wall } from "../../utils/Raycasting";
 
@@ -24,10 +27,10 @@ interface WallLayerProps {
   drawStart: { x: number; y: number } | null;
   mousePos: { x: number; y: number } | null;
   activeTool: string;
-  // Interaction callbacks
+  isDrawing: boolean;
+  // Callbacks
   onToggleDoor: (id: string) => void;
   onRemoveWall: (id: string) => void;
-  isDrawing: boolean;
 }
 
 export default function WallLayer({
@@ -41,60 +44,77 @@ export default function WallLayer({
   activeTool,
   onToggleDoor,
   onRemoveWall,
-  isDrawing,
 }: WallLayerProps) {
   const strokeWidth = Math.max(1.5, 2.5 / zoom);
-  const hitWidth = Math.max(8, 10 / zoom);
+  const hitWidth = Math.max(10, 14 / zoom); // generous hit area
   const dotRadius = Math.max(3, 4 / zoom);
 
   return (
     <Layer>
       <Group x={cameraX} y={cameraY} scaleX={zoom} scaleY={zoom}>
-        {/* ── Existing walls ── */}
-        {walls.map((w) => (
-          <Group key={w.id}>
-            {/* Wide invisible hit area */}
-            <Line
-              points={[w.x1, w.y1, w.x2, w.y2]}
-              stroke="transparent"
-              strokeWidth={hitWidth}
-              onClick={() => {
-                if (!isGM) return;
-                if (
-                  w.wall_type === "door_closed" ||
-                  w.wall_type === "door_open"
-                ) {
-                  onToggleDoor(w.id);
-                } else if (!isDrawing) {
-                  onRemoveWall(w.id);
-                }
-              }}
-            />
-            {/* Visible coloured line */}
-            <Line
-              points={[w.x1, w.y1, w.x2, w.y2]}
-              stroke={WALL_COLORS[w.wall_type] ?? "#ef4444"}
-              strokeWidth={strokeWidth}
-              lineCap="round"
-              opacity={isGM ? 0.85 : 0}
-              listening={false}
-            />
-            {/* Door midpoint dot */}
-            {(w.wall_type === "door_closed" || w.wall_type === "door_open") &&
-              isGM && (
+        {/* ── Existing walls ─────────────────────────────────────────────────── */}
+        {walls.map((w) => {
+          const isDoor =
+            w.wall_type === "door_closed" || w.wall_type === "door_open";
+          const color = WALL_COLORS[w.wall_type] ?? "#ef4444";
+
+          return (
+            <Group key={w.id}>
+              {/* Wide invisible hit area for easier clicking */}
+              <Line
+                points={[w.x1, w.y1, w.x2, w.y2]}
+                stroke="transparent"
+                strokeWidth={hitWidth}
+                onClick={() => {
+                  // Erase tool always deletes — takes priority over door toggle
+                  if (isGM && activeTool === "erase") {
+                    onRemoveWall(w.id);
+                    return;
+                  }
+                  // Doors: anyone can toggle open/closed with non-erase tools
+                  if (isDoor) {
+                    onToggleDoor(w.id);
+                  }
+                }}
+                // Cursor hint: pointer for doors so players know they're clickable
+                onMouseEnter={(e) => {
+                  if (!isDoor) return;
+                  const stage = e.target.getStage();
+                  if (stage) stage.container().style.cursor = "pointer";
+                }}
+                onMouseLeave={(e) => {
+                  if (!isDoor) return;
+                  const stage = e.target.getStage();
+                  if (stage) stage.container().style.cursor = "";
+                }}
+              />
+
+              {/* Visible coloured line — GMs always see walls; players see only doors */}
+              <Line
+                points={[w.x1, w.y1, w.x2, w.y2]}
+                stroke={color}
+                strokeWidth={strokeWidth}
+                lineCap="round"
+                opacity={isGM ? 0.85 : isDoor ? 0.7 : 0}
+                listening={false}
+              />
+
+              {/* Door midpoint indicator dot */}
+              {isDoor && (
                 <Circle
                   x={(w.x1 + w.x2) / 2}
                   y={(w.y1 + w.y2) / 2}
-                  radius={dotRadius * 1.5}
-                  fill={WALL_COLORS[w.wall_type]}
+                  radius={dotRadius * 1.8}
+                  fill={color}
                   opacity={0.9}
                   listening={false}
                 />
               )}
-          </Group>
-        ))}
+            </Group>
+          );
+        })}
 
-        {/* ── Preview segment while drawing ── */}
+        {/* ── Preview segment while drawing (GM only) ─────────────────────────── */}
         {isGM && drawStart && mousePos && (
           <Line
             points={[drawStart.x, drawStart.y, mousePos.x, mousePos.y]}
@@ -109,7 +129,7 @@ export default function WallLayer({
           />
         )}
 
-        {/* ── Start point dot ── */}
+        {/* ── Start-point anchor dot ──────────────────────────────────────────── */}
         {isGM && drawStart && (
           <Circle
             x={drawStart.x}

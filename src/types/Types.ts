@@ -1,4 +1,5 @@
 
+
 export interface Scene {
   id: string
   game_id: string
@@ -19,6 +20,7 @@ export type ActiveTool =
   | "square"
   | "wall"
   | "door"
+  | "erase"
   | "fog_reveal"
   | "fog_hide";
 
@@ -27,12 +29,17 @@ export function isMeasureTool(tool: ActiveTool): tool is MeasureTool {
 }
 
 export interface TokenStats {
-  hp?: number;
-  maxHp?: number;
-  ac?: number;
-  /** GM-controlled flag — when true the HP bar and AC badge render on the token */
-  showStats?: boolean;
+  hp: number;
+  maxHp: number;
+  ac: number;
+  showStats: boolean;
   vision_radius: number;
+  darkvision: number;
+  auras?: {
+    radius: number;
+    color: string;
+    label?: string;
+  }[];
 }
 
 export interface Token {
@@ -50,3 +57,4 @@ export interface Token {
   stats_json?: TokenStats | null;
   owner_id?: string;
 }
+export type VisibilityMode = "fog" | "lighting" | "none";

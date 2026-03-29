@@ -12,6 +12,7 @@ import {
 import type { Scene } from "../hooks/useScenes";
 import { useTokens } from "../hooks/useTokens";
 import { useCharacterSheet } from "../hooks/useCharacterSheet";
+import { useFog } from "../hooks/useFog";
 import { useWalls } from "../hooks/useWalls";
 
 import type { ActiveTool } from "../types/Types";
@@ -25,8 +26,14 @@ import PlayerPickerModal from "../components/PlayerPickerModal";
 import PresenceHUD from "../components/Presencehud";
 import AssignStatBlockPicker from "../components/StatBlockPicker";
 import NpcStatBlockPanel from "../components/tabletop/StatsPanel";
-import { PresenceUser, useRealtimeGame } from "../hooks/useRealTimeGame";
+import {
+  PresenceUser,
+  useRealtimeGame,
+  RemotePing,
+} from "../hooks/useRealTimeGame";
+import type { Ping } from "../components/tabletop/PingLayer";
 import { useNpcStatBlocks } from "../hooks/useStatBlock";
+import { useMeasurementStore } from "../store/MeasurementStore";
 
 export default function GameSession() {
   // ── Auth ──────────────────────────────────────────────────────────────────────
@@ -84,14 +91,19 @@ export default function GameSession() {
   const storeRemoveToken = useGameStore((s) => s.removeToken);
   const setSceneSettings = useGameStore((s) => s.setSceneSettings);
   const gameSettings = useGameStore((s) => s.gameSettings);
+  const setFeetPerSquare = useMeasurementStore((s) => s.setFeetPerSquare);
 
-  // Expose tokens to window so NPC handlers can look up token data without prop drilling
   const _tokens = useGameStore((s) => s.tokens);
   useEffect(() => {
     (window as any).__gameStoreTokens = _tokens;
   }, [_tokens]);
+  // Expose store for locate-token camera pan
+  const _store = useGameStore;
+  useEffect(() => {
+    (window as any).__gameStore = _store;
+  }, [_store]);
 
-  // ── Character sheet hook (must be before any handler that uses autoLinkSheet) ─
+  // ── Character sheet ───────────────────────────────────────────────────────────
   const {
     openSheet,
     needsSystemPick,
@@ -107,7 +119,7 @@ export default function GameSession() {
   } = useCharacterSheet(user?.id ?? "", isGM, gameSystemSlug);
 
   // ── NPC stat blocks ───────────────────────────────────────────────────────────
-  const { statBlocks, assignToToken } = useNpcStatBlocks(gameId ?? null);
+  const { assignToToken } = useNpcStatBlocks(gameId ?? null);
   const [openStatBlockId, setOpenStatBlockId] = useState<string | null>(null);
   const [assigningTokenId, setAssigningTokenId] = useState<string | null>(null);
   const [assigningTokenName, setAssigningTokenName] = useState<string>("");
@@ -116,23 +128,43 @@ export default function GameSession() {
   const [activeSceneId, setActiveSceneId] = useState<string | null>(null);
   const activeSceneIdRef = useRef<string | null>(null);
 
-  // ── Walls + fog ──────────────────────────────────────────────────────────────
-  const {
-    walls,
-    addWall,
-    removeWall,
-    toggleDoor,
-    reload: reloadWalls,
-  } = useWalls(activeSceneId, gameId ?? null);
-  const [fogEnabled, setFogEnabled] = useState(false);
-  const [revealedRegions, setRevealedRegions] = useState<
-    { cx: number; cy: number; radius: number }[]
-  >([]);
-
-  const updateActiveScene = (id: string | null) => {
+  const updateActiveScene = useCallback((id: string | null) => {
     activeSceneIdRef.current = id;
     setActiveSceneId(id);
-  };
+  }, []);
+
+  // ── Walls ─────────────────────────────────────────────────────────────────────
+
+  // ── Fog — single source of truth, shared by Tabletop + GMPanel ───────────────
+  // sendFogRef is set after useRealtimeGame (below) and passed into useFog's ref.
+  const sendFogRef = useRef<
+    ((e: import("../hooks/useFog").FogBroadcastEvent) => void) | null
+  >(null);
+  const sendFogStable = useCallback(
+    (e: import("../hooks/useFog").FogBroadcastEvent) => sendFogRef.current?.(e),
+    [],
+  );
+
+  // handleWallBroadcast stable ref — useWalls is called AFTER useRealtimeGame
+  // so we forward through a ref to break the circular declaration dependency.
+  const handleWallBroadcastRef = useRef<
+    ((e: import("../hooks/useWalls").WallBroadcastEvent) => void) | null
+  >(null);
+  const handleWallBroadcastStable = useCallback(
+    (e: import("../hooks/useWalls").WallBroadcastEvent) =>
+      handleWallBroadcastRef.current?.(e),
+    [],
+  );
+  const {
+    visibilityMode,
+    revealedRegions,
+    setVisibilityMode,
+    addRevealedRegion,
+    removeRevealedRegion,
+    clearFog,
+    handleFogBroadcast,
+    handleSceneUpdate,
+  } = useFog(activeSceneId, gameId ?? null, sendFogStable);
 
   const dbSetActiveScene = useCallback(
     async (sceneId: string) => {
@@ -162,8 +194,12 @@ export default function GameSession() {
         mapWidth: scene.map_width ?? DEFAULT_SCENE_SETTINGS.mapWidth,
         mapHeight: scene.map_height ?? DEFAULT_SCENE_SETTINGS.mapHeight,
       });
+      // feet_per_square is stored on the scene so all clients share the same scale
+      if ((scene as any).feet_per_square) {
+        setFeetPerSquare((scene as any).feet_per_square);
+      }
     },
-    [setSceneSettings],
+    [setSceneSettings, setFeetPerSquare],
   );
 
   // ── Restore on mount ──────────────────────────────────────────────────────────
@@ -196,7 +232,8 @@ export default function GameSession() {
       updateActiveScene(active.id);
       setMap(active.map_url ?? "/testmap.jpg");
       applySceneSettings(active);
-      setFogEnabled((active as any).fog_enabled ?? false);
+      // useFog handles fog_enabled, visibility_mode, and revealedRegions
+      // automatically when activeSceneId changes — no manual loading needed.
 
       const { data: tokenRows } = await supabase
         .from("tokens")
@@ -214,8 +251,9 @@ export default function GameSession() {
       updateActiveScene(scene.id);
       setMap(scene.map_url ?? "/testmap.jpg");
       applySceneSettings(scene);
-      setFogEnabled((scene as any).fog_enabled ?? false);
       await dbSetActiveScene(scene.id);
+      // useFog reacts to activeSceneId change and reloads fog state automatically
+
       const { data: tokenRows } = await supabase
         .from("tokens")
         .select("*")
@@ -223,25 +261,83 @@ export default function GameSession() {
         .order("created_at", { ascending: true });
       setTokens(tokenRows ?? []);
     },
-    [setMap, dbSetActiveScene, setTokens, applySceneSettings],
+    [
+      setMap,
+      dbSetActiveScene,
+      setTokens,
+      applySceneSettings,
+      updateActiveScene,
+    ],
   );
 
   const [presenceUsers, setPresenceUsers] = useState<PresenceUser[]>([]);
+  const [pings, setPings] = useState<Ping[]>([]);
 
-  // ── Realtime — tokens, scenes, measurements, presence ────────────────────────
-  const { remoteMeasures, broadcastMeasure, broadcastClearMeasure } =
-    useRealtimeGame({
-      gameId: gameId ?? "",
-      userId: user?.id ?? "",
-      isGM,
-      activeSceneId,
-      onSceneSwitch: handleSceneSwitch,
-      onPresenceChange: setPresenceUsers,
-    });
+  const handleRemotePing = useCallback((ping: RemotePing) => {
+    const p: Ping = {
+      id: ping.id,
+      x: ping.x,
+      y: ping.y,
+      color: ping.color,
+      label: ping.label,
+      timestamp: ping.timestamp,
+    };
+    setPings((prev) => [...prev, p]);
+    setTimeout(
+      () => setPings((prev) => prev.filter((pp) => pp.id !== p.id)),
+      3000,
+    );
+  }, []);
+
+  // ── Realtime ──────────────────────────────────────────────────────────────────
+  const {
+    remoteMeasures,
+    broadcastMeasure,
+    broadcastClearMeasure,
+    sendFog,
+    sendTokenMove,
+    sendWall,
+    sendPing,
+  } = useRealtimeGame({
+    gameId: gameId ?? "",
+    userId: user?.id ?? "",
+    isGM,
+    activeSceneId,
+    onSceneSwitch: handleSceneSwitch,
+    onPresenceChange: setPresenceUsers,
+    onFogBroadcast: handleFogBroadcast,
+    onFogSceneUpdate: handleSceneUpdate,
+    onSceneSettingsChange: applySceneSettings,
+    onWallBroadcast: handleWallBroadcastStable,
+    onPing: handleRemotePing,
+  });
+  // Wire the shared channel's sendFog into useFog's ref
+  // (useEffect runs after render so this is always set before any fog action)
+  useEffect(() => {
+    sendFogRef.current = sendFog;
+  }, [sendFog]);
+
+  // ── Walls — uses shared channel via sendWall from useRealtimeGame ──────────
+  const sendWallRef = useRef<
+    ((e: import("../hooks/useWalls").WallBroadcastEvent) => void) | null
+  >(null);
+  const sendWallStable = useCallback(
+    (e: import("../hooks/useWalls").WallBroadcastEvent) =>
+      sendWallRef.current?.(e),
+    [],
+  );
+  const { walls, addWall, removeWall, toggleDoor, handleWallBroadcast } =
+    useWalls(activeSceneId, gameId ?? null, sendWallStable);
+  useEffect(() => {
+    sendWallRef.current = sendWall;
+  }, [sendWall]);
+  useEffect(() => {
+    handleWallBroadcastRef.current = handleWallBroadcast;
+  }, [handleWallBroadcast]);
 
   // ── Save settings ─────────────────────────────────────────────────────────────
   const handleSaveSceneSettings = useCallback(
-    async (settings: SceneSettings) => {
+    async (settings: SceneSettings & { feetPerSquare?: number }) => {
       const sceneId = activeSceneIdRef.current;
       if (!sceneId) return;
       await supabase
@@ -255,6 +351,10 @@ export default function GameSession() {
           bg_color: settings.bgColor,
           map_width: settings.mapWidth,
           map_height: settings.mapHeight,
+          // feet_per_square persisted so players receive it via postgres_changes
+          ...(settings.feetPerSquare !== undefined
+            ? { feet_per_square: settings.feetPerSquare }
+            : {}),
         })
         .eq("id", sceneId);
     },
@@ -290,10 +390,15 @@ export default function GameSession() {
 
   const handleMoveToken = useCallback(
     async (id: string, x: number, y: number) => {
+      // Optimistic local update
       storeMoveToken(id, x, y);
+      // Broadcast position to all other clients instantly (GM + other players)
+      // This bypasses the postgres_changes round-trip and owner_id ambiguity
+      sendTokenMove(id, x, y);
+      // Also persist to DB (source of truth on reconnect/reload)
       await dbMoveToken(id, x, y);
     },
-    [storeMoveToken, dbMoveToken],
+    [storeMoveToken, dbMoveToken, sendTokenMove],
   );
 
   const handleRenameToken = useCallback(
@@ -316,8 +421,6 @@ export default function GameSession() {
     async (id: string, player_editable: boolean) => {
       storeUpdateToken(id, { player_editable });
       await supabase.from("tokens").update({ player_editable }).eq("id", id);
-
-      // Auto-link the token owner's sheet when player control is granted
       if (player_editable && gameId) {
         const tokens = (window as any).__gameStoreTokens ?? [];
         const token = tokens.find((t: any) => t.id === id);
@@ -337,12 +440,17 @@ export default function GameSession() {
         ac: number;
         showStats: boolean;
         vision_radius: number;
+        darkvision: number;
+        auras?: { radius: number; color: string; label?: string }[];
       },
     ) => {
-      storeUpdateToken(id, { stats_json: stats });
-      await supabase.from("tokens").update({ stats_json: stats }).eq("id", id);
-
-      // Sync back to the linked character sheet so sheet data stays consistent
+      // Cast to any: stats_json is JSONB and accepts our extended shape.
+      // The project TokenStats type may not include auras[] but the DB column does.
+      storeUpdateToken(id, { stats_json: stats as any });
+      await supabase
+        .from("tokens")
+        .update({ stats_json: stats as any })
+        .eq("id", id);
       const { data: token } = await supabase
         .from("tokens")
         .select("sheet_id")
@@ -355,15 +463,16 @@ export default function GameSession() {
           .eq("id", token.sheet_id)
           .single();
         if (sheet) {
-          const updatedData = {
-            ...(sheet.data ?? {}),
-            hp: stats.hp,
-            maxHp: stats.maxHp,
-            ac: stats.ac,
-          };
           await supabase
             .from("character_sheets")
-            .update({ data: updatedData })
+            .update({
+              data: {
+                ...(sheet.data ?? {}),
+                hp: stats.hp,
+                maxHp: stats.maxHp,
+                ac: stats.ac,
+              },
+            })
             .eq("id", token.sheet_id);
         }
       }
@@ -391,31 +500,47 @@ export default function GameSession() {
     [storeRemoveToken],
   );
 
-  const handleToggleFog = useCallback(
-    async (enabled: boolean) => {
-      setFogEnabled(enabled);
-      if (activeSceneId) {
-        await supabase
-          .from("scenes")
-          .update({ fog_enabled: enabled })
-          .eq("id", activeSceneId);
-      }
+  const handleLocateToken = useCallback((id: string) => {
+    // Pan the camera so the token is centered in the viewport
+    // We import setZoomAndCamera from gameStore
+    const tokens = (window as any).__gameStoreTokens ?? [];
+    const token = tokens.find((t: any) => t.id === id);
+    if (!token) return;
+    const store = (window as any).__gameStore;
+    if (store) {
+      const { zoom, panCamera } = store.getState();
+      const W = window.innerWidth;
+      const H = window.innerHeight;
+      panCamera(W / 2 - token.x * zoom, H / 2 - token.y * zoom);
+    }
+  }, []);
+
+  const handlePing = useCallback(
+    (x: number, y: number) => {
+      const me = presenceUsers.find((u) => u.userId === user?.id);
+      const label = me?.displayName ?? (isGM ? "GM" : "Player");
+      const color = isGM ? "#f59e0b" : "#60a5fa";
+      const ping = sendPing(x, y, label, color);
+      // Show own ping locally immediately (broadcast echo skipped by senderId check)
+      setPings((prev) => [...prev, { ...ping, label }]);
+      setTimeout(
+        () => setPings((prev) => prev.filter((p) => p.id !== ping.id)),
+        3000,
+      );
     },
-    [activeSceneId],
+    [sendPing, isGM, presenceUsers, user?.id],
   );
 
   // ── Sheet handlers ────────────────────────────────────────────────────────────
   const handleOpenSheet = useCallback(
     (tokenId: string) => {
-      if (!gameId) return;
-      openForToken(tokenId, gameId);
+      if (gameId) openForToken(tokenId, gameId);
     },
     [gameId, openForToken],
   );
 
   const handleOpenOwnSheet = useCallback(() => {
-    if (!gameId) return;
-    openOwn(gameId, gameSystemId);
+    if (gameId) openOwn(gameId, gameSystemId);
   }, [gameId, gameSystemId, openOwn]);
 
   // ── NPC stat block handlers ───────────────────────────────────────────────────
@@ -448,24 +573,14 @@ export default function GameSession() {
     },
     [assigningTokenId, assignToToken, storeUpdateToken],
   );
-  const handleAddRevealedRegion = useCallback(
-    (cx: number, cy: number, radius: number) => {
-      setRevealedRegions((prev) => [...prev, { cx, cy, radius }]);
-      // TODO: persist to fog_revealed table in Supabase if needed
-    },
-    [],
-  );
 
-  // ── Prompt players to create their sheet on first session load ────────────────
+  // ── Prompt players to create sheet on first load ──────────────────────────────
   const sheetCheckDone = useRef(false);
   useEffect(() => {
     if (!gameId || !user || isGM) return;
-    if (gameSystemId === undefined) return; // wait for game info to load
+    if (gameSystemId === undefined) return;
     if (sheetCheckDone.current) return;
     sheetCheckDone.current = true;
-
-    // Silently create the sheet using the game's system — don't open it
-    // The player opens it themselves via the toolbar when they're ready
     supabase
       .from("character_sheets")
       .select("id")
@@ -474,7 +589,6 @@ export default function GameSession() {
       .maybeSingle()
       .then(async ({ data }) => {
         if (!data) {
-          // No sheet yet — create one silently using the game's system
           await supabase.rpc("get_or_create_sheet", {
             p_game_id: gameId,
             p_user_id: user.id,
@@ -511,6 +625,8 @@ export default function GameSession() {
       <Tabletop
         activeTool={activeTool}
         isGM={isGM}
+        gameId={gameId}
+        sceneId={activeSceneId}
         diceOpen={diceOpen}
         onDiceClose={() => setDiceOpen(false)}
         onMoveToken={handleMoveToken}
@@ -524,8 +640,6 @@ export default function GameSession() {
         onOpenStatBlock={handleOpenStatBlock}
         onAssignStatBlock={handleAssignStatBlock}
         walls={walls}
-        fogEnabled={fogEnabled}
-        revealedRegions={revealedRegions}
         currentUserId={user.id}
         onAddWall={addWall}
         onRemoveWall={removeWall}
@@ -533,7 +647,13 @@ export default function GameSession() {
         onMeasureChange={broadcastMeasure}
         onMeasureClear={broadcastClearMeasure}
         remoteMeasures={[...remoteMeasures.values()]}
-        onAddRevealedRegion={handleAddRevealedRegion}
+        pings={pings}
+        onPing={handlePing}
+        // Fog — passed from the single useFog call above
+        visibilityMode={visibilityMode}
+        revealedRegions={revealedRegions}
+        onAddRevealedRegion={addRevealedRegion}
+        onRemoveRevealedRegion={removeRevealedRegion}
       />
 
       <div className="absolute left-0 top-0 h-full z-20 pointer-events-none">
@@ -546,6 +666,9 @@ export default function GameSession() {
           onDiceToggle={() => setDiceOpen((v) => !v)}
           onOpenSheet={handleOpenOwnSheet}
           gmPanelOpen={gmPanelOpen}
+          visibilityMode={visibilityMode}
+          currentUserId={user.id}
+          onEditStats={handleEditStats}
         />
       </div>
 
@@ -563,13 +686,17 @@ export default function GameSession() {
             onClose={() => setGmPanelOpen(false)}
             onOpenStatBlock={setOpenStatBlockId}
             gameSystemSlug={gameSystemSlug}
-            fogEnabled={fogEnabled}
-            onToggleFog={handleToggleFog}
+            // Fog — same useFog instance, so GM controls affect all clients
+            onClearFog={clearFog}
+            visibilityMode={visibilityMode}
+            onSetVisibilityMode={setVisibilityMode}
+            onDeleteToken={(id) => handleDeleteTokens([id])}
+            onRenameToken={handleRenameToken}
+            onLocateToken={handleLocateToken}
           />
         </div>
       )}
 
-      {/* Character sheet */}
       {openSheet && (
         <CharacterSheet
           sheetId={openSheet.sheetId}
@@ -581,8 +708,6 @@ export default function GameSession() {
           onClose={closeSheet}
         />
       )}
-
-      {/* System picker — shown when player opens sheet for the first time */}
       {needsSystemPick && (
         <SystemPickerModal
           defaultSystemId={gameSystemId}
@@ -590,8 +715,6 @@ export default function GameSession() {
           onCancel={cancelSystemPick}
         />
       )}
-
-      {/* Player picker — GM selects which player's sheet to open */}
       {needsPlayerPick && (
         <PlayerPickerModal
           gameId={gameId!}
@@ -599,8 +722,6 @@ export default function GameSession() {
           onCancel={cancelPlayerPick}
         />
       )}
-
-      {/* NPC stat block panel */}
       {openStatBlockId && (
         <NpcStatBlockPanel
           statBlockId={openStatBlockId}
@@ -609,8 +730,6 @@ export default function GameSession() {
           onClose={() => setOpenStatBlockId(null)}
         />
       )}
-
-      {/* Assign stat block picker */}
       {assigningTokenId && (
         <AssignStatBlockPicker
           tokenName={assigningTokenName}
