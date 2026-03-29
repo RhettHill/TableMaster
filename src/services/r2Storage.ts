@@ -67,10 +67,17 @@ export async function uploadToR2(
     size: file.size,
   });
 
+  // Use arrayBuffer + plain Blob with no explicit Content-Type.
+  // This keeps the request "simple" (no CORS preflight) because the
+  // presigned URL only signs `host` — adding Content-Type would trigger
+  // a preflight OPTIONS that R2 rejects with 403.
+  const buffer = await file.arrayBuffer();
+  const blob = new Blob([buffer]);
+
   const res = await fetch(presignedUrl, {
     method: "PUT",
-
-    body: file,
+    body: blob,
+    // No headers — prevents browser from sending Content-Type preflight
   });
 
   if (!res.ok) {
