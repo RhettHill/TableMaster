@@ -147,19 +147,6 @@ const CR_XP: Record<string, number> = {
 
 // ── Sub-components ────────────────────────────────────────────────────────────
 
-function AbilityCol({ label, score }: { label: string; score: number }) {
-  return (
-    <div className="flex flex-col items-center flex-1">
-      <span className="text-[10px] font-bold text-red-700 uppercase">
-        {label}
-      </span>
-      <span className="text-sm font-semibold text-gray-900">
-        {score} ({mStr(score)})
-      </span>
-    </div>
-  );
-}
-
 function StatLine({ label, value }: { label: string; value: string }) {
   if (!value) return null;
   return (

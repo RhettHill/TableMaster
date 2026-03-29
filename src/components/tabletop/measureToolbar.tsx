@@ -93,8 +93,6 @@ export default function MeasureLayer({ measure, zoom }: MeasureLayerProps) {
   const feet = toFeet(distPx, gridSize, feetPerSquare);
   const angle = angleDeg(start, end);
   const midPt = mid(start, end);
-  const dx = end.x - start.x;
-  const dy = end.y - start.y;
 
   return (
     <Group>

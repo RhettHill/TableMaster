@@ -118,7 +118,7 @@ export default function TokenLayer({
   );
 
   const handleDragEnd = useCallback(
-    (primaryId: string, rawX: number, rawY: number) => {
+    (rawX: number, rawY: number) => {
       const start = dragStartPrimary.current;
       if (!start) return;
 
@@ -208,9 +208,7 @@ export default function TokenLayer({
                 y: (v: number) => n.y(v),
               });
             }}
-            onDragEnd={(e) =>
-              handleDragEnd(token.id, e.target.x(), e.target.y())
-            }
+            onDragEnd={(e) => handleDragEnd(e.target.x(), e.target.y())}
           />
         );
       })}

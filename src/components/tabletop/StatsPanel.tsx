@@ -1,14 +1,8 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { supabase } from "../../services/supabase";
-import Dnd5eStatBlock, {
-  Dnd5eStatBlockData,
-  DEFAULT_STAT_BLOCK,
-} from "../blocks/Dnd5eStatsBlock";
-import Pf2eStatBlock, {
-  Pf2eStatBlockData,
-  DEFAULT_PF2E_STAT_BLOCK,
-} from "../blocks/Pf2StatBlock";
+import Dnd5eStatBlock, { Dnd5eStatBlockData } from "../blocks/Dnd5eStatsBlock";
+import Pf2eStatBlock, { Pf2eStatBlockData } from "../blocks/Pf2StatBlock";
 
 interface NpcStatBlockPanelProps {
   statBlockId: string;
@@ -26,7 +20,6 @@ interface StatBlockRow {
 
 export default function NpcStatBlockPanel({
   statBlockId,
-  gameId,
   isGM,
   onClose,
 }: NpcStatBlockPanelProps) {

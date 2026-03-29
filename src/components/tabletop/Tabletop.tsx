@@ -18,7 +18,6 @@ import WallLayer from "./WallLayer";
 import FogLayer from "./FogLayer";
 import AuraLayer from "./AuraLayer";
 import PingLayer from "./PingLayer";
-import type { Ping } from "./PingLayer";
 import type { Wall } from "../../utils/Raycasting";
 import type { VisibilityMode, FogRegion } from "../../hooks/useFog";
 
@@ -100,8 +99,6 @@ export default function Tabletop({
   activeTool,
   isGM,
   diceOpen,
-  gameId,
-  sceneId,
   onDiceClose,
   onMoveToken,
   onRenameToken,

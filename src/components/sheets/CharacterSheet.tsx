@@ -2,8 +2,8 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { supabase } from "../../services/supabase";
 import { useGameStore } from "../../store/gameStore";
-import Dnd5eSheet, { Dnd5eData, DEFAULT_DND5E } from "./Dnd5eSheet";
-import Pf2eSheet, { Pf2eData, DEFAULT_PF2E } from "./Pf2Sheet";
+import Dnd5eSheet, { Dnd5eData } from "./Dnd5eSheet";
+import Pf2eSheet, { Pf2eData } from "./Pf2Sheet";
 import GenericSheet, { SheetTemplate } from "./GenericSheet";
 
 interface CharacterSheetProps {
@@ -31,8 +31,6 @@ interface SheetRow {
 export default function CharacterSheet({
   sheetId,
   tokenId,
-  gameId,
-  userId,
   isGM,
   canEdit,
   onClose,
@@ -87,15 +85,9 @@ export default function CharacterSheet({
   };
 
   const storeUpdateToken = useGameStore((s) => s.updateToken);
-  const tokens = useGameStore((s) => s.tokens);
 
   // Find the token linked to this sheet.
   // Prefer the prop, then store lookup by sheet_id, then by owner_id.
-  const linkedTokenId =
-    tokenId ??
-    tokens.find((t: any) => t.sheet_id === sheetId)?.id ??
-    tokens.find((t: any) => t.owner_id === userId)?.id ??
-    null;
 
   // ── Load sheet + system ───────────────────────────────────────────────────
   useEffect(() => {

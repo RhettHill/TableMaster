@@ -95,11 +95,7 @@ export function useCharacterSheet(
   // ── Open player's own sheet (toolbar button or on-load check) ─────────────
   // linkTokenId: optionally link the found/created sheet to a token
   const openOwn = useCallback(
-    async (
-      gameId: string,
-      gameSystemId?: string,
-      linkTokenId?: string | null,
-    ) => {
+    async (gameId: string, linkTokenId?: string | null) => {
       // Check if player already has a sheet for this game
       const { data: existing } = await supabase
         .from("character_sheets")
@@ -308,7 +304,7 @@ export function useCharacterSheet(
       // Token is either unowned+player_editable, or owned by this player
       // Route through openOwn so system picker shows if needed (never auto-creates blank)
       if (token.player_editable) {
-        await openOwn(gameId, undefined, tokenId);
+        await openOwn(gameId, undefined);
       }
     },
     [currentUserId, isGM, createAndOpen, openOwn],

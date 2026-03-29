@@ -123,7 +123,7 @@ export default function TokenContextMenu({
   const [ac, setAc] = useState(stats?.ac ?? 10);
   const [showStats, setShowStats] = useState(stats?.showStats ?? false);
   const [vision_radius, setVisionRadius] = useState(stats?.vision_radius ?? 0);
-  const [darkvision, setDarkvision] = useState(stats?.darkvision ?? 0);
+  const darkvision = stats?.darkvision ?? 0;
   // Auras — safe extraction from stats_json (may be typed loosely)
   const [auras, setAuras] = useState<Aura[]>(() => {
     const raw = (stats as any)?.auras;

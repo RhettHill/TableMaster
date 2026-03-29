@@ -62,7 +62,6 @@ export default function AuraEditor({
   feetPerSquare,
   onChange,
   canEdit,
-  tokenSize,
 }: AuraEditorProps) {
   const [expanded, setExpanded] = useState(false);
 

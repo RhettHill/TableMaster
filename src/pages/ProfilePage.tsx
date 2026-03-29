@@ -91,7 +91,6 @@ export default function ProfilePage() {
     setSuccess("");
     setAvatarPreview(URL.createObjectURL(file));
 
-    const ext = file.name.split(".").pop() ?? "jpg";
     let publicUrl: string;
     try {
       // Avatars use a special "avatars" game context

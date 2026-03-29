@@ -595,8 +595,6 @@ export default function Pf2eSheet({ data, canEdit, isGM, onChange }: Props) {
     if (canEdit) onChange(patch);
   };
 
-  const abilityMod = (score: number) => Math.floor((score - 10) / 2);
-
   return (
     <div className="flex flex-col h-full text-white/80">
       <Tabs tabs={TABS} active={tab} onChange={setTab} />

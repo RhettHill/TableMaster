@@ -173,7 +173,6 @@ export default function Dashboard() {
   const [search, setSearch] = useState("");
   const [userName, setUserName] = useState("");
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
-  const [userId, setUserId] = useState<string>("");
   const navigate = useNavigate();
   const [systems, setSystems] = useState<
     { id: string; name: string; slug: string }[]
@@ -189,7 +188,6 @@ export default function Dashboard() {
         navigate("/home");
         return;
       }
-      setUserId(user.id);
 
       const { data: systemRows } = await supabase
         .from("systems")

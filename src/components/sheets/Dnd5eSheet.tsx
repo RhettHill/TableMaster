@@ -278,7 +278,7 @@ interface Props {
   onChange: (patch: Partial<Dnd5eData>) => void;
 }
 
-export default function Dnd5eSheet({ data, canEdit, isGM, onChange }: Props) {
+export default function Dnd5eSheet({ data, canEdit, onChange }: Props) {
   const [tab, setTab] = useState<Tab>("core");
   const d = { ...DEFAULT_DND5E, ...data };
   const set = (patch: Partial<Dnd5eData>) => {

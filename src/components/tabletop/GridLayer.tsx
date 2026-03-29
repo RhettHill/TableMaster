@@ -1,4 +1,4 @@
-import { Group, Line, RegularPolygon } from "react-konva";
+import { Group, Line } from "react-konva";
 import { useGameStore } from "../../store/gameStore";
 
 // Hex grid uses offset coordinates. We draw pointy-top hexagons.

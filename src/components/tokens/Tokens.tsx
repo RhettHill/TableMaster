@@ -2,12 +2,7 @@ import { Circle, Text, Group, Image, Line, Rect } from "react-konva";
 import { Token } from "../../types/Types";
 import { KonvaEventObject } from "konva/lib/Node";
 import useImage from "use-image";
-import {
-  tokenRadius,
-  tokenOffset,
-  snapToGrid,
-  type GridType,
-} from "../../utils/GridUtils";
+import { tokenRadius, tokenOffset, type GridType } from "../../utils/GridUtils";
 
 interface TokenProps {
   token: Token;
@@ -164,7 +159,6 @@ export default function Token({
   token,
   gridSize,
   gridType,
-  snapEnabled,
   isGM,
   selected = false,
   draggable = false,
