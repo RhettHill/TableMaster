@@ -1,10 +1,12 @@
-import { useRef, useState } from "react";
+import { useRef, useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   useGameStore,
   SceneSettings,
   GameSettings,
 } from "../../store/gameStore";
 import { useMeasurementStore } from "../../store/MeasurementStore";
+import { supabase } from "../../services/supabase";
 import type { VisibilityMode } from "../../hooks/useFog";
 
 interface SettingsPanelProps {
@@ -16,6 +18,8 @@ interface SettingsPanelProps {
   visibilityMode: VisibilityMode;
   onSetVisibilityMode: (mode: VisibilityMode) => void;
 }
+
+// ── Shared primitives ─────────────────────────────────────────────────────────
 
 function Field({
   label,
@@ -220,38 +224,100 @@ const VISIBILITY_OPTIONS: {
   icon: string;
   label: string;
   desc: string;
+  requiresPaid: boolean;
 }[] = [
   {
     value: "none",
     icon: "👁",
     label: "None",
     desc: "All players see everything",
+    requiresPaid: false,
   },
   {
     value: "fog",
     icon: "🖌️",
-    label: "Fog",
+    label: "Fog of War",
     desc: "Paint revealed areas manually",
+    requiresPaid: false,
   },
   {
     value: "lighting",
     icon: "💡",
-    label: "Lighting",
+    label: "Dynamic Lighting",
     desc: "Token vision + wall raycasting",
+    requiresPaid: true,
   },
 ];
 
 function VisibilityModeSelector({
   value,
   onChange,
+  hasLightingAccess,
+  onUpgradeClick,
 }: {
   value: VisibilityMode;
   onChange: (v: VisibilityMode) => void;
+  hasLightingAccess: boolean;
+  onUpgradeClick: () => void;
 }) {
   return (
     <div className="flex flex-col gap-1.5">
       {VISIBILITY_OPTIONS.map((opt) => {
         const active = value === opt.value;
+        const locked = opt.requiresPaid && !hasLightingAccess;
+
+        if (locked) {
+          return (
+            <button
+              key={opt.value}
+              onClick={onUpgradeClick}
+              className="flex items-center gap-2.5 px-3 py-2 rounded-lg border text-left
+                transition-all duration-150 group relative overflow-hidden
+                bg-white/[0.02] border-white/8 hover:border-amber-500/30 hover:bg-amber-500/5"
+            >
+              {/* Subtle shimmer on hover */}
+              <span
+                className="absolute inset-0 bg-gradient-to-r from-transparent via-amber-500/5 to-transparent
+                translate-x-[-100%] group-hover:translate-x-[100%] transition-transform duration-700"
+              />
+
+              <span className="text-sm w-4 text-center flex-shrink-0 opacity-40">
+                {opt.icon}
+              </span>
+
+              <div className="flex flex-col min-w-0 flex-1">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-xs font-semibold leading-tight text-white/30">
+                    {opt.label}
+                  </span>
+                  {/* Pro badge */}
+                  <span
+                    className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded
+                    bg-amber-500/15 border border-amber-500/30 text-amber-400
+                    text-[9px] font-bold uppercase tracking-wider leading-none"
+                  >
+                    ✦ Plus
+                  </span>
+                </div>
+                <span className="text-[10px] leading-tight text-white/20 mt-0.5">
+                  {opt.desc}
+                </span>
+              </div>
+
+              {/* Lock icon + upgrade nudge */}
+              <div className="flex-shrink-0 flex flex-col items-end gap-0.5">
+                <span className="text-white/20 text-sm">🔒</span>
+                <span
+                  className="text-[9px] text-amber-400/60 group-hover:text-amber-400
+                  transition-colors whitespace-nowrap"
+                >
+                  Upgrade →
+                </span>
+              </div>
+            </button>
+          );
+        }
+
         return (
           <button
             key={opt.value}
@@ -288,6 +354,35 @@ function VisibilityModeSelector({
   );
 }
 
+// ── Upgrade prompt shown below the locked option ──────────────────────────────
+
+function UpgradeBanner({ onUpgrade }: { onUpgrade: () => void }) {
+  return (
+    <div
+      className="flex items-start gap-2.5 px-3 py-2.5 rounded-lg border
+      border-amber-500/20 bg-amber-500/5 mt-1"
+    >
+      <span className="text-amber-400 text-sm flex-shrink-0 mt-0.5">✦</span>
+      <div className="flex flex-col gap-1 min-w-0">
+        <p className="text-xs text-white/60 leading-snug">
+          Dynamic Lighting is available on the{" "}
+          <span className="text-amber-400 font-semibold">Plus plan</span>.
+          Upgrade to unlock raycasting vision, wall blocking, and per-token
+          sight ranges.
+        </p>
+        <button
+          onClick={onUpgrade}
+          className="self-start mt-0.5 px-2.5 py-1 rounded-md text-[11px] font-semibold
+            bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/30
+            text-amber-400 transition-all"
+        >
+          View plans →
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 export default function SettingsPanel({
@@ -298,6 +393,7 @@ export default function SettingsPanel({
   visibilityMode,
   onSetVisibilityMode,
 }: SettingsPanelProps) {
+  const navigate = useNavigate();
   const sceneSettings = useGameStore((s) => s.sceneSettings);
   const gameSettings = useGameStore((s) => s.gameSettings);
   const setSceneSettings = useGameStore((s) => s.setSceneSettings);
@@ -306,9 +402,62 @@ export default function SettingsPanel({
   const feetPerSquare = useMeasurementStore((s) => s.feetPerSquare);
   const setFeetPerSquare = useMeasurementStore((s) => s.setFeetPerSquare);
 
-  // When grid scale changes, persist it to DB so players receive it.
-  // We call onSceneSettingChange with feetPerSquare attached (handleSaveSceneSettings
-  // accepts the optional feetPerSquare field and writes feet_per_square to DB).
+  // ── Fetch the GM's subscription status ───────────────────────────────────────
+  // We only need plan_id and subscription_status — no sensitive data.
+  const [hasLightingAccess, setHasLightingAccess] = useState(false);
+  const [planCheckDone, setPlanCheckDone] = useState(false);
+
+  useEffect(() => {
+    const check = async () => {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (!user) {
+        setPlanCheckDone(true);
+        return;
+      }
+
+      const { data: profile } = await supabase
+        .from("profiles")
+        .select("plan_id, subscription_status")
+        .eq("id", user.id)
+        .single();
+
+      if (!profile) {
+        setPlanCheckDone(true);
+        return;
+      }
+
+      // User has access if they have an active (or trialing) paid subscription.
+      // "inactive" or null means free tier — no lighting access.
+      const activeStatuses = ["active", "trialing"];
+      const hasSub = activeStatuses.includes(profile.subscription_status ?? "");
+
+      // Also check if their plan isn't the cheapest/free one.
+      // If plan_id is null they're on the free tier by default.
+      setHasLightingAccess(hasSub && !!profile.plan_id);
+      setPlanCheckDone(true);
+    };
+    check();
+  }, []);
+
+  // If the GM somehow has lighting mode active but loses their subscription,
+  // quietly revert them to "fog" mode.
+  useEffect(() => {
+    if (planCheckDone && !hasLightingAccess && visibilityMode === "lighting") {
+      onSetVisibilityMode("fog");
+    }
+  }, [planCheckDone, hasLightingAccess, visibilityMode, onSetVisibilityMode]);
+
+  const handleUpgradeClick = () => {
+    // Open plans page in a new tab so the GM doesn't lose their game session
+    window.open("/plans", "_blank", "noopener,noreferrer");
+  };
+
+  // ── Debounced setting saves ───────────────────────────────────────────────────
+  const sceneDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const gameDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const handleFeetPerSquareChange = (v: number) => {
     setFeetPerSquare(v);
     const updated = { ...sceneSettings, feetPerSquare: v } as any;
@@ -318,9 +467,6 @@ export default function SettingsPanel({
       600,
     );
   };
-
-  const sceneDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const gameDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const handleSceneChange = (patch: Partial<SceneSettings>) => {
     const updated = { ...sceneSettings, ...patch };
@@ -467,10 +613,18 @@ export default function SettingsPanel({
         <p className="text-[10px] text-white/30 -mt-1">
           Changes apply immediately for all players.
         </p>
+
         <VisibilityModeSelector
           value={visibilityMode}
           onChange={onSetVisibilityMode}
+          hasLightingAccess={hasLightingAccess}
+          onUpgradeClick={handleUpgradeClick}
         />
+
+        {/* Show upgrade banner if user doesn't have access */}
+        {planCheckDone && !hasLightingAccess && (
+          <UpgradeBanner onUpgrade={handleUpgradeClick} />
+        )}
 
         {visibilityMode !== "none" && onClearFog && (
           <button
