@@ -108,21 +108,12 @@ export default function PlansPage() {
   // ── Start Stripe Checkout ────────────────────────────────────────────────────
   const handleChoosePlan = async (plan: Plan) => {
     if (!plan.stripe_price_id) {
-      setToast({
-        type: "error",
-        message: "This plan isn't available for purchase yet.",
-      });
-      return;
-    }
-    if (
-      profile?.plan_id === plan.id &&
-      profile?.subscription_status === "active"
-    ) {
-      setToast({ type: "error", message: "You're already on this plan." });
+      setToast({ type: "error", message: "This plan isn't purchasable yet." });
       return;
     }
 
     setCheckoutLoading(plan.id);
+
     try {
       const {
         data: { session },
@@ -150,12 +141,13 @@ export default function PlansPage() {
 
       const data = await res.json();
       if (!res.ok || !data.url)
-        throw new Error(data.error || "Failed to create checkout session");
+        throw new Error(data.error || "Checkout failed");
+
       window.location.href = data.url;
     } catch (err: any) {
       setToast({
         type: "error",
-        message: err.message || "Something went wrong. Please try again.",
+        message: err.message || "Something went wrong",
       });
       setCheckoutLoading(null);
     }
