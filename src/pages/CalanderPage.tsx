@@ -334,7 +334,6 @@ function gameColor(gameId: string) {
 
 export default function CalendarPage() {
   const navigate = useNavigate();
-  const [userId, setUserId] = useState<string | null>(null);
   const [userName, setUserName] = useState("");
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
   const [games, setGames] = useState<Game[]>([]);
@@ -361,7 +360,6 @@ export default function CalendarPage() {
         navigate("/login");
         return;
       }
-      setUserId(user.id);
 
       const [{ data: profile }, { data: ownedGames }, { data: memberRows }] =
         await Promise.all([
@@ -936,7 +934,6 @@ function SessionCard({
   onEdit: (s: GameSession) => void;
 }) {
   const c = gameColor(session.game_id);
-  const d = new Date(session.scheduled_at);
   return (
     <div
       onClick={() => session.is_owner && onEdit(session)}
