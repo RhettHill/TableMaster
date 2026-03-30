@@ -124,7 +124,7 @@ export default function PlansPage() {
       }
 
       const res = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/create-checkout-session`,
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/stripe-handler`,
         {
           method: "POST",
           headers: {
