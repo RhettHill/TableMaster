@@ -24,19 +24,29 @@ function formatBytes(bytes: number) {
   return bytes + " B";
 }
 
-// Status pill colors
 const STATUS_STYLES: Record<string, string> = {
   active: "bg-emerald-500/15 border-emerald-500/30 text-emerald-400",
   trialing: "bg-sky-500/15 border-sky-500/30 text-sky-400",
+  canceling: "bg-amber-500/15 border-amber-500/30 text-amber-400",
   past_due: "bg-red-500/15 border-red-500/30 text-red-400",
   inactive: "bg-white/5 border-white/10 text-white/30",
+};
+
+const STATUS_LABELS: Record<string, string> = {
+  active: "Active",
+  trialing: "Trial",
+  canceling: "Cancels at period end",
+  past_due: "Payment failed",
+  inactive: "Inactive",
 };
 
 export default function PlansPage() {
   const [plans, setPlans] = useState<Plan[]>([]);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
-  const [checkoutLoading, setCheckoutLoading] = useState<string | null>(null); // planId being checked out
+  const [checkoutLoading, setCheckoutLoading] = useState<string | null>(null);
+  const [cancelling, setCancelling] = useState(false);
+  const [showCancelConfirm, setShowCancelConfirm] = useState(false);
   const [toast, setToast] = useState<{
     type: "success" | "error";
     message: string;
@@ -44,14 +54,13 @@ export default function PlansPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
 
-  // ── Handle redirect back from Stripe Checkout ────────────────────────────────
+  // ── Handle Stripe redirect back ──────────────────────────────────────────────
   useEffect(() => {
     if (searchParams.get("success") === "true") {
       setToast({
         type: "success",
         message: "🎉 Payment successful! Your plan has been activated.",
       });
-      // Clean the URL
       window.history.replaceState({}, "", "/plans");
     } else if (searchParams.get("cancelled") === "true") {
       setToast({
@@ -62,14 +71,13 @@ export default function PlansPage() {
     }
   }, [searchParams]);
 
-  // Auto-dismiss toast
   useEffect(() => {
     if (!toast) return;
-    const t = setTimeout(() => setToast(null), 5000);
+    const t = setTimeout(() => setToast(null), 6000);
     return () => clearTimeout(t);
   }, [toast]);
 
-  // ── Load plans + current user profile ───────────────────────────────────────
+  // ── Load plans + profile ─────────────────────────────────────────────────────
   useEffect(() => {
     const load = async () => {
       const {
@@ -106,8 +114,6 @@ export default function PlansPage() {
       });
       return;
     }
-
-    // Already on this plan
     if (
       profile?.plan_id === plan.id &&
       profile?.subscription_status === "active"
@@ -117,7 +123,6 @@ export default function PlansPage() {
     }
 
     setCheckoutLoading(plan.id);
-
     try {
       const {
         data: { session },
@@ -144,12 +149,8 @@ export default function PlansPage() {
       );
 
       const data = await res.json();
-
-      if (!res.ok || !data.url) {
+      if (!res.ok || !data.url)
         throw new Error(data.error || "Failed to create checkout session");
-      }
-
-      // Redirect to Stripe's hosted checkout page
       window.location.href = data.url;
     } catch (err: any) {
       setToast({
@@ -160,10 +161,61 @@ export default function PlansPage() {
     }
   };
 
+  // ── Cancel subscription ──────────────────────────────────────────────────────
+  const handleCancelSubscription = async () => {
+    setCancelling(true);
+    setShowCancelConfirm(false);
+
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      if (!session?.access_token) {
+        navigate("/login?redirect=/plans");
+        return;
+      }
+
+      const res = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/cancel-subscription`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${session.access_token}`,
+          },
+        },
+      );
+
+      const data = await res.json();
+      if (!res.ok)
+        throw new Error(data.error || "Failed to cancel subscription");
+
+      // Reflect canceling state immediately without a page reload
+      setProfile((prev) =>
+        prev ? { ...prev, subscription_status: "canceling" } : prev,
+      );
+      setToast({ type: "success", message: `✓ ${data.message}` });
+    } catch (err: any) {
+      setToast({
+        type: "error",
+        message: err.message || "Something went wrong. Please try again.",
+      });
+    } finally {
+      setCancelling(false);
+    }
+  };
+
   const isCurrentPlan = (plan: Plan) =>
-    profile?.plan_id === plan.id && profile?.subscription_status === "active";
+    profile?.plan_id === plan.id &&
+    (profile?.subscription_status === "active" ||
+      profile?.subscription_status === "canceling");
 
   const isFree = (plan: Plan) => plan.price_monthly === 0;
+
+  const hasActivePaidSub =
+    !!profile?.stripe_subscription_id &&
+    (profile?.subscription_status === "active" ||
+      profile?.subscription_status === "trialing");
 
   return (
     <div
@@ -173,14 +225,51 @@ export default function PlansPage() {
       {/* ── Toast ─────────────────────────────────────────────────────────────── */}
       {toast && (
         <div
-          className={`fixed top-4 left-1/2 -translate-x-1/2 z-50 px-5 py-3 rounded-xl border shadow-2xl text-sm font-medium transition-all
-            ${
-              toast.type === "success"
-                ? "bg-emerald-500/15 border-emerald-500/30 text-emerald-300"
-                : "bg-red-500/15 border-red-500/30 text-red-300"
-            }`}
+          className={`fixed top-4 left-1/2 -translate-x-1/2 z-50 px-5 py-3 rounded-xl border shadow-2xl text-sm font-medium
+          ${
+            toast.type === "success"
+              ? "bg-emerald-500/15 border-emerald-500/30 text-emerald-300"
+              : "bg-red-500/15 border-red-500/30 text-red-300"
+          }`}
         >
           {toast.message}
+        </div>
+      )}
+
+      {/* ── Cancel confirmation modal ─────────────────────────────────────────── */}
+      {showCancelConfirm && (
+        <div
+          className="fixed inset-0 z-40 flex items-center justify-center bg-black/70 backdrop-blur-sm"
+          onClick={() => setShowCancelConfirm(false)}
+        >
+          <div
+            className="w-full max-w-sm mx-4 rounded-2xl border border-white/10 bg-[#0f0f1c]/98 p-6 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-white font-bold text-lg mb-2">
+              Cancel subscription?
+            </h3>
+            <p className="text-stone-400 text-sm leading-relaxed mb-6">
+              You'll keep full access to your current plan until the end of your
+              billing period. After that, your account will automatically revert
+              to the free plan.
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowCancelConfirm(false)}
+                className="flex-1 py-2.5 rounded-xl border border-white/10 text-white/50 text-sm hover:bg-white/5 transition-colors"
+              >
+                Keep subscription
+              </button>
+              <button
+                onClick={handleCancelSubscription}
+                disabled={cancelling}
+                className="flex-1 py-2.5 rounded-xl bg-red-500/20 hover:bg-red-500/30 border border-red-500/30 text-red-400 text-sm font-semibold transition-all disabled:opacity-50"
+              >
+                {cancelling ? "Cancelling…" : "Yes, cancel"}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -194,12 +283,6 @@ export default function PlansPage() {
             >
               <span className="text-amber-500">⚔</span>
               TableMaster
-            </button>
-            <button
-              onClick={() => navigate("/calendar")}
-              className="ml-2 text-stone-400 hover:text-white text-sm transition-colors"
-            >
-              Calendar
             </button>
             <button
               onClick={() => navigate("/plans")}
@@ -223,22 +306,48 @@ export default function PlansPage() {
           Plans
         </h1>
         <p className="text-stone-500 text-sm max-w-md">
-          Upgrade to unlock more storage and larger file uploads for your
-          campaigns.
+          Upgrade to unlock more storage, larger file uploads, and premium
+          features for your campaigns.
         </p>
 
-        {/* Current plan badge */}
-        {profile?.plan_id && profile.subscription_status && (
-          <div className="mt-4 inline-flex items-center gap-2">
-            <span className="text-stone-500 text-xs">Your subscription:</span>
-            <span
-              className={`text-xs px-2.5 py-0.5 rounded-full border font-semibold capitalize
+        {/* Subscription status + cancel button */}
+        {profile?.subscription_status &&
+          profile.subscription_status !== "inactive" && (
+            <div className="mt-5 flex flex-wrap items-center gap-3">
+              <div className="flex items-center gap-2">
+                <span className="text-stone-500 text-xs">Subscription:</span>
+                <span
+                  className={`text-xs px-2.5 py-0.5 rounded-full border font-semibold
                 ${STATUS_STYLES[profile.subscription_status] ?? STATUS_STYLES.inactive}`}
-            >
-              {profile.subscription_status}
-            </span>
-          </div>
-        )}
+                >
+                  {STATUS_LABELS[profile.subscription_status] ??
+                    profile.subscription_status}
+                </span>
+              </div>
+
+              {hasActivePaidSub && (
+                <button
+                  onClick={() => setShowCancelConfirm(true)}
+                  className="text-xs text-stone-500 hover:text-red-400 transition-colors underline underline-offset-2"
+                >
+                  Cancel subscription
+                </button>
+              )}
+
+              {profile.subscription_status === "canceling" && (
+                <p className="text-xs text-amber-400/70 w-full sm:w-auto">
+                  Access continues until the end of your billing period.
+                </p>
+              )}
+
+              {profile.subscription_status === "past_due" && (
+                <p className="text-xs text-red-400/80 w-full sm:w-auto">
+                  Your last payment failed — update your payment method to avoid
+                  losing access.
+                </p>
+              )}
+            </div>
+          )}
       </div>
 
       {/* ── Plans grid ────────────────────────────────────────────────────────── */}
@@ -256,7 +365,7 @@ export default function PlansPage() {
           <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
             {plans.map((plan) => {
               const current = isCurrentPlan(plan);
-              const loading = checkoutLoading === plan.id;
+              const isLoading = checkoutLoading === plan.id;
 
               return (
                 <div
@@ -268,10 +377,11 @@ export default function PlansPage() {
                         : "border-white/8 bg-white/[0.02] hover:bg-white/[0.05] hover:border-white/15"
                     }`}
                 >
-                  {/* Current plan ribbon */}
                   {current && (
                     <div className="absolute top-3 right-3 px-2 py-0.5 rounded-full bg-amber-500/20 border border-amber-500/40 text-amber-400 text-[10px] font-bold uppercase tracking-wider">
-                      Current
+                      {profile?.subscription_status === "canceling"
+                        ? "Canceling"
+                        : "Current"}
                     </div>
                   )}
 
@@ -310,20 +420,11 @@ export default function PlansPage() {
                       value={formatBytes(plan.max_file_size)}
                     />
                     <Feature
-                      label="Campaign Limit"
-                      value={plan.name === "Free" ? "2" : "Unlimited"}
+                      label="Campaigns"
+                      value={isFree(plan) ? "2" : "Unlimited"}
                     />
-                    {plan.name === "Plus" && (
+                    {!isFree(plan) && (
                       <Feature label="Dynamic Lighting" value="Unlocked" />
-                    )}
-
-                    {plan.name === "Pro" && (
-                      <>
-                        <Feature label="Dynamic Lighting" value="Unlocked" />
-
-                        <Feature label="Animated Maps" value="Unlocked" />
-                        <Feature label="Asset Transfers" value="Unlocked" />
-                      </>
                     )}
                   </div>
 
@@ -331,7 +432,9 @@ export default function PlansPage() {
                   <div className="px-5 py-4 border-t border-white/6">
                     {current ? (
                       <div className="w-full py-2 rounded-lg text-center text-amber-400/70 text-sm font-semibold">
-                        ✓ Active plan
+                        {profile?.subscription_status === "canceling"
+                          ? "Cancels at period end"
+                          : "✓ Active plan"}
                       </div>
                     ) : isFree(plan) ? (
                       <div className="w-full py-2 rounded-lg text-center text-white/25 text-sm">
@@ -345,12 +448,12 @@ export default function PlansPage() {
                           font-semibold transition-all shadow-lg shadow-amber-900/30 hover:shadow-amber-900/50
                           disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                       >
-                        {loading ? (
+                        {isLoading ? (
                           <>
                             <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
                             Redirecting…
                           </>
-                        ) : profile?.plan_id ? (
+                        ) : profile?.stripe_subscription_id ? (
                           "Switch plan"
                         ) : (
                           "Choose plan"
@@ -364,7 +467,6 @@ export default function PlansPage() {
           </div>
         )}
 
-        {/* Secure payment note */}
         {plans.some((p) => p.stripe_price_id) && (
           <p className="text-stone-600 text-xs text-center mt-8 flex items-center justify-center gap-1.5">
             <span>🔒</span> Payments securely processed by Stripe. Cancel
