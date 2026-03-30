@@ -208,7 +208,6 @@ export default function PlansPage() {
     !!profile?.stripe_subscription_id &&
     (profile?.subscription_status === "active" ||
       profile?.subscription_status === "trialing");
-
   return (
     <div
       className="min-h-screen bg-[#0a0a0f] text-white"
