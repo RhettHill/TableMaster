@@ -1,11 +1,7 @@
 /**
  * r2Storage — uploads files directly to Cloudflare R2 using presigned URLs.
- * Fixed version:
- * - Reliable JWT handling (with refresh)
- * - Correct presign payload (includes fileSize)
- * - Handles backend response shape differences
- * - Prevents undefined URL bugs
- * - Avoids signature mismatch (no headers on PUT)
+ * Includes a client-side storage pre-check so users get a clear error
+ * before the upload even starts (the server also enforces this).
  */
 
 import { supabase } from "./supabase";
@@ -33,51 +29,69 @@ export class StorageQuotaError extends Error {
   }
 }
 
-// ── Auth helper (FIXED) ───────────────────────────────────────────────────────
+// ── Auth helper ───────────────────────────────────────────────────────────────
 
 async function getJWT(): Promise<string> {
-  // Try existing session first
-  const {
-    data: { session },
-  } = await supabase.auth.getSession();
+  const { data: { session } } = await supabase.auth.getSession();
+  if (session?.access_token) return session.access_token;
 
-  if (session?.access_token) {
-    return session.access_token;
-  }
-
-  // 🔥 Force refresh if missing
   const { data, error } = await supabase.auth.refreshSession();
+  if (error || !data.session?.access_token) throw new Error("Not authenticated");
+  return data.session.access_token;
+}
 
-  if (error || !data.session?.access_token) {
-    throw new Error("Not authenticated");
+// ── Pre-upload quota check ────────────────────────────────────────────────────
+// Runs before the presign request so the user gets an instant clear error
+// rather than a confusing server-side rejection mid-upload.
+
+async function checkStorageQuota(fileSize: number): Promise<void> {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error("Not authenticated");
+
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("storage_used, plan_id, subscription_status, plans(name, storage_limit, max_file_size)")
+    .eq("id", user.id)
+    .single();
+
+  if (!profile) return; // can't check, let the server decide
+
+  const plan = profile.plans as any;
+  if (!plan) return;
+
+  const storageUsed: number = profile.storage_used ?? 0;
+  const storageLimit: number = plan.storage_limit ?? Infinity;
+  const maxFileSize: number = plan.max_file_size ?? Infinity;
+  const planName: string = plan.name ?? "Free";
+
+  // Check individual file size limit
+  if (fileSize > maxFileSize) {
+    throw new StorageQuotaError(
+      `This file (${formatBytes(fileSize)}) exceeds the ${formatBytes(maxFileSize)} file size limit on the ${planName} plan.`,
+      { plan: planName, max_file_size: maxFileSize }
+    );
   }
 
-  return data.session.access_token;
+  // Check total storage quota
+  if (storageUsed + fileSize > storageLimit) {
+    const remaining = Math.max(0, storageLimit - storageUsed);
+    throw new StorageQuotaError(
+      `Not enough storage. You have ${formatBytes(remaining)} remaining on the ${planName} plan.`,
+      { plan: planName, storage_used: storageUsed, storage_limit: storageLimit }
+    );
+  }
 }
 
 // ── Upload to R2 (low-level) ──────────────────────────────────────────────────
 
-export async function uploadToR2(
-  presignedUrl: string,
-  file: File
-): Promise<void> {
-  console.log("Uploading file:", {
-    name: file.name,
-    type: file.type,
-    size: file.size,
-  });
-
-  // Use arrayBuffer + plain Blob with no explicit Content-Type.
-  // This keeps the request "simple" (no CORS preflight) because the
-  // presigned URL only signs `host` — adding Content-Type would trigger
-  // a preflight OPTIONS that R2 rejects with 403.
+export async function uploadToR2(presignedUrl: string, file: File): Promise<void> {
   const buffer = await file.arrayBuffer();
   const blob = new Blob([buffer]);
 
   const res = await fetch(presignedUrl, {
     method: "PUT",
     body: blob,
-    // No headers — prevents browser from sending Content-Type preflight
+    // No Content-Type header — prevents CORS preflight that R2 rejects
   });
 
   if (!res.ok) {
@@ -94,14 +108,15 @@ export async function uploadFile(
   gameId: string,
   onProgress?: (pct: number) => void
 ): Promise<UploadResult> {
-  // 1. Get JWT (reliable)
+  // 1. Client-side quota pre-check (fast, gives clear UX before any network call)
+  await checkStorageQuota(file.size);
+
+  // 2. Get JWT
   const token = await getJWT();
 
-  console.log("Using JWT:", token);
-
-  // 2. Request presigned URL (FIXED payload)
+  // 3. Request presigned URL
   const res = await fetch(
-    "https://cedpshwrbikizggfxcdp.supabase.co/functions/v1/r2-presign",
+    `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/r2-presign`,
     {
       method: "POST",
       headers: {
@@ -111,7 +126,7 @@ export async function uploadFile(
       body: JSON.stringify({
         fileName: file.name || crypto.randomUUID(),
         fileType: file.type || "application/octet-stream",
-        fileSize: file.size, // ✅ REQUIRED
+        fileSize: file.size,
         gameId,
       }),
     }
@@ -121,21 +136,14 @@ export async function uploadFile(
     const text = await res.text();
     console.error("Presign failed:", text);
 
-    // Optional: detect quota errors
-    if (text.toLowerCase().includes("quota")) {
-      throw new StorageQuotaError("Storage quota exceeded", {
-        plan: "unknown",
-      });
+    if (text.toLowerCase().includes("quota") || text.toLowerCase().includes("limit")) {
+      throw new StorageQuotaError("Storage quota exceeded", { plan: "unknown" });
     }
 
     throw new Error("Failed to get presigned URL");
   }
 
   const data = await res.json();
-
-  console.log("Presign response:", data);
-
-  // 3. Handle different backend response shapes (FIXED)
   const url = data.url || data.presignedUrl;
   const path = data.path;
   const publicUrl = data.publicUrl;
@@ -145,10 +153,9 @@ export async function uploadFile(
     throw new Error("Presigned URL missing from response");
   }
 
-  // 4. Upload to R2 (FIXED)
+  // 4. Upload to R2
   await uploadToR2(url, file);
 
-  // 5. Progress callback
   if (onProgress) onProgress(100);
 
   return {
@@ -158,7 +165,7 @@ export async function uploadFile(
   };
 }
 
-// ── Storage helpers (unchanged) ───────────────────────────────────────────────
+// ── Storage info helpers ──────────────────────────────────────────────────────
 
 export interface StorageInfo {
   used: number;
@@ -177,7 +184,7 @@ export async function getStorageInfo(userId: string): Promise<StorageInfo | null
 
   if (error || !data) return null;
 
-  const plan = (data.plans as any);
+  const plan = data.plans as any;
   const used = data.storage_used ?? 0;
   const limit = plan?.storage_limit ?? 104857600;
 

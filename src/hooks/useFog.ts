@@ -23,29 +23,73 @@ interface FogBroadcastClear  { type: "fog_clear" }
 interface FogBroadcastMode   { type: "fog_mode";   mode: VisibilityMode }
 export type FogBroadcastEvent = FogBroadcastAdd | FogBroadcastRemove | FogBroadcastClear | FogBroadcastMode;
 
-// sendFn is injected by useRealtimeGame so fog broadcasts go on the shared channel
 type SendFn = (event: FogBroadcastEvent) => void;
+
+// ── Geometry helpers ──────────────────────────────────────────────────────────
+
+/**
+ * Returns true if circle A is fully contained within circle B.
+ * We use this to cull redundant regions: if a big circle already covers
+ * a smaller one, the smaller one adds nothing to the visible area.
+ */
+function circleContains(
+  bx: number, by: number, br: number,
+  ax: number, ay: number, ar: number,
+): boolean {
+  return Math.hypot(bx - ax, by - ay) + ar <= br;
+}
+
+/**
+ * Greedy O(n²) pass: remove any region that is fully contained by another.
+ * On a typical map after heavy fog-painting this can trim hundreds of rows
+ * down to a few dozen, which keeps the canvas re-draw fast.
+ *
+ * We run this client-side so the GM's screen stays responsive; the pruned
+ * IDs are also deleted from the DB and broadcast so all clients stay in sync.
+ */
+function cullContainedRegions(regions: FogRegion[]): {
+  kept: FogRegion[];
+  removedIds: string[];
+} {
+  const removedIds: string[] = [];
+  const kept: FogRegion[] = [];
+
+  for (let i = 0; i < regions.length; i++) {
+    const a = regions[i];
+    // Is region[i] fully covered by any other region?
+    const covered = regions.some(
+      (b, j) =>
+        j !== i &&
+        !b.id.startsWith("temp-") &&
+        circleContains(b.cx, b.cy, b.radius, a.cx, a.cy, a.radius),
+    );
+    if (covered && !a.id.startsWith("temp-")) {
+      removedIds.push(a.id);
+    } else {
+      kept.push(a);
+    }
+  }
+
+  return { kept, removedIds };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 export function useFog(
   sceneId: string | null,
   gameId: string | null,
-  sendFn: SendFn | null,   // injected from useRealtimeGame
+  sendFn: SendFn | null,
 ) {
   const [visibilityMode, setVisibilityModeState] = useState<VisibilityMode>("none");
   const [revealedRegions, setRevealedRegions] = useState<FogRegion[]>([]);
 
-  // Mirror of revealedRegions in a ref — always current, readable synchronously
-  // without needing to be inside a state setter callback. This lets removeRevealedRegion
-  // compute which rows to delete before awaiting the DB call, avoiding the race
-  // where rapid brush strokes each see the same stale prev state.
   const revealedRegionsRef = useRef<FogRegion[]>([]);
   useEffect(() => { revealedRegionsRef.current = revealedRegions; }, [revealedRegions]);
 
-  // Keep sendFn in a ref so callbacks don't need it in their dep arrays
   const sendRef = useRef<SendFn | null>(null);
   useEffect(() => { sendRef.current = sendFn; }, [sendFn]);
 
-  // ── Initial load (and reload on scene change) ────────────────────────────────
+  // ── Initial load ─────────────────────────────────────────────────────────────
   const load = useCallback(async () => {
     if (!sceneId) {
       setVisibilityModeState("none");
@@ -71,13 +115,39 @@ export function useFog(
 
   useEffect(() => { load(); }, [load]);
 
-  // ── Called by useRealtimeGame when a fog broadcast arrives ───────────────────
+  // ── Consolidate — prune redundant circles from DB ─────────────────────────────
+  // Called automatically after each stroke ends (via a debounce in the parent).
+  // Safe to call frequently — it's a no-op if there's nothing to cull.
+  const consolidate = useCallback(async () => {
+    const current = revealedRegionsRef.current;
+    if (current.length < 10) return; // not worth the work below this threshold
+
+    const { kept, removedIds } = cullContainedRegions(current);
+    if (removedIds.length === 0) return;
+
+    // Update local state immediately
+    setRevealedRegions(kept);
+
+    // Delete from DB
+    await supabase.from("fog_revealed").delete().in("id", removedIds);
+
+    // Broadcast removal so other clients trim their lists too
+    sendRef.current?.({ type: "fog_remove", ids: removedIds });
+  }, []);
+
+  // Debounced consolidation — runs 1.5 s after the last region was added
+  const consolidateTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scheduleConsolidate = useCallback(() => {
+    if (consolidateTimer.current) clearTimeout(consolidateTimer.current);
+    consolidateTimer.current = setTimeout(consolidate, 1500);
+  }, [consolidate]);
+
+  // ── Broadcast handler ─────────────────────────────────────────────────────────
   const handleFogBroadcast = useCallback((event: FogBroadcastEvent) => {
     switch (event.type) {
       case "fog_add":
         setRevealedRegions((prev) => {
           const r = event.region;
-          // Remove matching temp placeholder, then deduplicate by real id
           const withoutTemp = prev.filter(
             (p) => !(p.id.startsWith("temp-") && p.cx === r.cx && p.cy === r.cy && p.radius === r.radius),
           );
@@ -92,28 +162,24 @@ export function useFog(
         setRevealedRegions([]);
         break;
       case "fog_mode":
-        // Immediate mode update without waiting for postgres_changes
         setVisibilityModeState(event.mode);
         break;
     }
   }, []);
 
-  // ── Called by useRealtimeGame when scenes UPDATE arrives ─────────────────────
   const handleSceneUpdate = useCallback((updated: { visibility_mode?: string }) => {
     if (updated.visibility_mode) {
       setVisibilityModeState(updated.visibility_mode as VisibilityMode);
     }
   }, []);
 
-  // ── Actions (called by GM only) ──────────────────────────────────────────────
+  // ── Actions ───────────────────────────────────────────────────────────────────
 
   const setVisibilityMode = useCallback(
     async (mode: VisibilityMode) => {
       setVisibilityModeState(mode);
       if (!sceneId) return;
-      // Broadcast immediately so players update without waiting for postgres_changes
       sendRef.current?.({ type: "fog_mode", mode });
-      // Also persist to DB as source of truth on reconnect/reload
       await supabase.from("scenes").update({ visibility_mode: mode }).eq("id", sceneId);
     },
     [sceneId],
@@ -123,7 +189,6 @@ export function useFog(
     async (cx: number, cy: number, radius: number) => {
       if (!sceneId || !gameId) return;
 
-      // Optimistic: show on GM's screen immediately
       const tempId = `temp-${Date.now()}-${Math.random()}`;
       setRevealedRegions((prev) => [
         ...prev,
@@ -142,25 +207,19 @@ export function useFog(
       }
 
       const region = data as FogRegion;
-
-      // Swap temp → real on GM's screen
       setRevealedRegions((prev) => prev.map((r) => (r.id === tempId ? region : r)));
-
-      // Broadcast real record to all clients via the shared game channel
       sendRef.current?.({ type: "fog_add", region });
+
+      // Schedule a consolidation pass after this stroke settles
+      scheduleConsolidate();
     },
-    [sceneId, gameId],
+    [sceneId, gameId, scheduleConsolidate],
   );
 
   const removeRevealedRegion = useCallback(
     async (cx: number, cy: number, radius: number) => {
       if (!sceneId) return;
 
-      // Read current regions directly from the ref (not from state setter callback)
-      // so we can compute toRemoveIds synchronously before the async DB call.
-      // Using the state setter callback caused a race: rapid brush strokes fired
-      // multiple calls before React batched the state updates, so each call saw
-      // the same stale `prev` and toRemoveIds got overwritten before the await.
       const current = revealedRegionsRef.current;
       const toRemove = current.filter((r) => {
         const dx = r.cx - cx;
@@ -171,11 +230,8 @@ export function useFog(
       if (toRemove.length === 0) return;
 
       const toRemoveIds = toRemove.map((r) => r.id).filter((id) => !id.startsWith("temp-"));
-
-      // Optimistic: remove from state immediately
       setRevealedRegions((prev) => prev.filter((r) => !toRemove.some((t) => t.id === r.id)));
 
-      // DB delete (only real rows, not temp placeholders)
       if (toRemoveIds.length > 0) {
         await supabase.from("fog_revealed").delete().in("id", toRemoveIds);
         sendRef.current?.({ type: "fog_remove", ids: toRemoveIds });
@@ -191,7 +247,6 @@ export function useFog(
     sendRef.current?.({ type: "fog_clear" });
   }, [sceneId]);
 
-  // fogEnabled is derived — true whenever fog is active
   const fogEnabled = visibilityMode !== "none";
 
   return {
@@ -202,8 +257,9 @@ export function useFog(
     addRevealedRegion,
     removeRevealedRegion,
     clearFog,
-    handleFogBroadcast,  // consumed by useRealtimeGame
-    handleSceneUpdate,   // consumed by useRealtimeGame
+    consolidate,         // exposed so SettingsPanel can offer a manual "Optimize" button
+    handleFogBroadcast,
+    handleSceneUpdate,
     reload: load,
   };
 }

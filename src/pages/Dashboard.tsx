@@ -11,6 +11,14 @@ interface Game {
   icon_url?: string | null;
 }
 
+interface PlanLimits {
+  planName: string;
+  maxCampaigns: number;
+  storageLimit: number;
+  storageUsed: number;
+  isPaid: boolean;
+}
+
 function timeAgo(dateStr: string) {
   const diff = Date.now() - new Date(dateStr).getTime();
   const days = Math.floor(diff / 86400000);
@@ -19,6 +27,13 @@ function timeAgo(dateStr: string) {
   if (days < 30) return `${days}d ago`;
   if (days < 365) return `${Math.floor(days / 30)}mo ago`;
   return `${Math.floor(days / 365)}y ago`;
+}
+
+function formatBytes(bytes: number) {
+  if (bytes >= 1024 ** 3) return (bytes / 1024 ** 3).toFixed(1) + " GB";
+  if (bytes >= 1024 ** 2) return (bytes / 1024 ** 2).toFixed(1) + " MB";
+  if (bytes >= 1024) return (bytes / 1024).toFixed(1) + " KB";
+  return bytes + " B";
 }
 
 const ACCENTS = [
@@ -32,6 +47,76 @@ const ACCENTS = [
 function accent(name: string) {
   return ACCENTS[name.charCodeAt(0) % ACCENTS.length];
 }
+
+// ── Storage bar ───────────────────────────────────────────────────────────────
+
+function StorageBar({ used, limit }: { used: number; limit: number }) {
+  const pct = limit > 0 ? Math.min(100, (used / limit) * 100) : 0;
+  const isWarning = pct >= 80;
+  const isFull = pct >= 100;
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="flex items-center justify-between">
+        <span className="text-[10px] text-white/30 uppercase tracking-widest font-medium">
+          Storage
+        </span>
+        <span
+          className={`text-[10px] tabular-nums font-mono ${
+            isFull
+              ? "text-red-400"
+              : isWarning
+                ? "text-amber-400"
+                : "text-white/30"
+          }`}
+        >
+          {formatBytes(used)} / {formatBytes(limit)}
+        </span>
+      </div>
+      <div className="h-1 w-full rounded-full bg-white/8 overflow-hidden">
+        <div
+          className={`h-full rounded-full transition-all duration-500 ${
+            isFull
+              ? "bg-red-500"
+              : isWarning
+                ? "bg-amber-500"
+                : "bg-amber-600/60"
+          }`}
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+    </div>
+  );
+}
+
+// ── Campaign limit banner ─────────────────────────────────────────────────────
+
+function LimitBanner({ onUpgrade }: { onUpgrade: () => void }) {
+  return (
+    <div className="flex items-start gap-3 px-4 py-3 rounded-xl border border-amber-500/20 bg-amber-500/5">
+      <span className="text-amber-400 text-base flex-shrink-0">⚔</span>
+      <div className="flex flex-col gap-1 min-w-0 flex-1">
+        <p className="text-white/70 text-sm font-semibold">
+          Campaign limit reached
+        </p>
+        <p className="text-white/40 text-xs leading-snug">
+          Free accounts can create up to 2 campaigns. Upgrade to create
+          unlimited campaigns and unlock more storage.
+        </p>
+      </div>
+      <button
+        onClick={onUpgrade}
+        className="flex-shrink-0 px-3 py-1.5 rounded-lg text-xs font-semibold
+          bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/30
+          text-amber-400 transition-all whitespace-nowrap"
+      >
+        Upgrade →
+      </button>
+    </div>
+  );
+}
+
+// ── Game card ─────────────────────────────────────────────────────────────────
 
 function GameCard({
   game,
@@ -65,13 +150,11 @@ function GameCard({
           background: `linear-gradient(135deg, ${dim} 0%, transparent 100%), #111118`,
         }}
       >
-        {/* Thin accent stripe along top */}
         <div
           className="absolute top-0 left-0 right-0 h-0.5"
           style={{ background: color }}
         />
 
-        {/* Campaign icon — left of header */}
         <div
           className="relative flex-shrink-0 w-11 h-11 rounded-xl overflow-hidden border border-white/10 shadow-lg"
           onClick={(e) => {
@@ -95,7 +178,6 @@ function GameCard({
               {initials}
             </div>
           )}
-          {/* Upload hover — GM only */}
           {onIconUpload && (
             <div className="absolute inset-0 bg-black/70 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center pointer-events-none">
               <span className="text-white text-[11px] font-semibold">📷</span>
@@ -112,7 +194,6 @@ function GameCard({
           />
         )}
 
-        {/* Role badge — sits in top-right corner of header */}
         <div className="absolute top-3 right-3 flex items-center gap-2">
           {game.isOwner && onDelete && (
             <button
@@ -164,6 +245,8 @@ function GameCard({
   );
 }
 
+// ── Main ──────────────────────────────────────────────────────────────────────
+
 export default function Dashboard() {
   const [games, setGames] = useState<Game[]>([]);
   const [newGameName, setNewGameName] = useState("");
@@ -173,6 +256,7 @@ export default function Dashboard() {
   const [search, setSearch] = useState("");
   const [userName, setUserName] = useState("");
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
+  const [planLimits, setPlanLimits] = useState<PlanLimits | null>(null);
   const navigate = useNavigate();
   const [systems, setSystems] = useState<
     { id: string; name: string; slug: string }[]
@@ -189,38 +273,55 @@ export default function Dashboard() {
         return;
       }
 
-      const { data: systemRows } = await supabase
-        .from("systems")
-        .select("id, name, slug")
-        .order("name");
+      const [
+        { data: systemRows },
+        { data: profile },
+        { data: ownedGames },
+        { data: memberRows },
+      ] = await Promise.all([
+        supabase.from("systems").select("id, name, slug").order("name"),
+        supabase
+          .from("profiles")
+          .select(
+            "display_name, username, avatar_url, storage_used, plan_id, subscription_status, plans(name, storage_limit, max_campaigns, price_monthly)",
+          )
+          .eq("id", user.id)
+          .single(),
+        supabase
+          .from("games")
+          .select("id, name, created_at, icon_url")
+          .eq("owner_id", user.id)
+          .order("created_at", { ascending: false }),
+        supabase
+          .from("game_members")
+          .select("game_id, games(id, name, created_at, icon_url)")
+          .eq("user_id", user.id),
+      ]);
+
       setSystems(systemRows ?? []);
       if (systemRows && systemRows.length > 0)
         setSelectedSystemId(systemRows[0].id);
 
-      const { data: profile } = await supabase
-        .from("profiles")
-        .select("display_name, username, avatar_url")
-        .eq("id", user.id)
-        .single();
+      if (profile) {
+        setUserName(
+          profile.display_name ||
+            profile.username ||
+            user.email?.split("@")[0] ||
+            "",
+        );
+        setAvatarUrl(profile.avatar_url ?? null);
 
-      setUserName(
-        profile?.display_name ||
-          profile?.username ||
-          user.email?.split("@")[0] ||
-          "",
-      );
-      setAvatarUrl(profile?.avatar_url ?? null);
-
-      const { data: ownedGames } = await supabase
-        .from("games")
-        .select("id, name, created_at, icon_url")
-        .eq("owner_id", user.id)
-        .order("created_at", { ascending: false });
-
-      const { data: memberRows } = await supabase
-        .from("game_members")
-        .select("game_id, games(id, name, created_at, icon_url)")
-        .eq("user_id", user.id);
+        const plan = profile.plans as any;
+        if (plan) {
+          setPlanLimits({
+            planName: plan.name,
+            maxCampaigns: plan.max_campaigns ?? 2,
+            storageLimit: plan.storage_limit,
+            storageUsed: profile.storage_used ?? 0,
+            isPaid: (plan.price_monthly ?? 0) > 0,
+          });
+        }
+      }
 
       const owned: Game[] = (ownedGames ?? []).map((g) => ({
         ...g,
@@ -238,32 +339,59 @@ export default function Dashboard() {
     init();
   }, []);
 
+  // How many campaigns this user owns (not joined as player)
+  const ownedCount = games.filter((g) => g.isOwner).length;
+  const atCampaignLimit =
+    planLimits !== null &&
+    !planLimits.isPaid &&
+    ownedCount >= planLimits.maxCampaigns;
+
   const createGame = async () => {
+    // Client-side guard — the DB trigger is the real enforcement
+    if (atCampaignLimit) {
+      setError(
+        `Free accounts can only create ${planLimits!.maxCampaigns} campaigns. Upgrade to create more.`,
+      );
+      return;
+    }
+
     const name = newGameName.trim();
     if (!name) {
       setError("Enter a campaign name first.");
       return;
     }
+
     setCreating(true);
     setError("");
+
     const {
       data: { user },
     } = await supabase.auth.getUser();
     if (!user) return;
+
     const { data, error: err } = await supabase
       .from("games")
       .insert([
         { name, owner_id: user.id, system_id: selectedSystemId || null },
       ])
       .select("id, name, created_at, icon_url");
+
     if (err) {
-      setError(err.message);
+      // Surface the trigger error message cleanly
+      if (err.message?.includes("Campaign limit reached")) {
+        setError(`You've reached your campaign limit. Upgrade to create more.`);
+      } else {
+        setError(err.message);
+      }
       setCreating(false);
       return;
     }
+
     if (data) {
-      setGames((prev) => [{ ...data[0], isOwner: true }, ...prev]);
+      const newGame = { ...data[0], isOwner: true };
+      setGames((prev) => [newGame, ...prev]);
       setNewGameName("");
+      // Update local owned count so the limit banner appears immediately
       navigate(`/game/${data[0].id}`);
     }
     setCreating(false);
@@ -285,7 +413,6 @@ export default function Dashboard() {
     if (!file) return;
     let publicUrl: string;
     try {
-      // Campaign icons use gameId as the "game" context for the presigned URL
       const result = await uploadFile(file, gameId);
       publicUrl = result.publicUrl;
     } catch (err: any) {
@@ -309,6 +436,7 @@ export default function Dashboard() {
     await supabase.auth.signOut();
     navigate("/home");
   };
+
   const filtered = games.filter((g) =>
     g.name.toLowerCase().includes(search.toLowerCase()),
   );
@@ -330,7 +458,6 @@ export default function Dashboard() {
       {/* Nav */}
       <nav className="relative z-10 border-b border-white/6 bg-[#0a0a0f]/80 backdrop-blur-sm sticky top-0">
         <div className="max-w-6xl mx-auto px-6 h-14 flex items-center justify-between">
-          {/* Left side - logo */}
           <div className="flex items-center gap-2.5">
             <button
               onClick={() => navigate("/")}
@@ -339,8 +466,6 @@ export default function Dashboard() {
               <span className="text-amber-500">⚔</span>
               TableMaster
             </button>
-
-            {/* Plans link */}
             <button
               onClick={() => navigate("/plans")}
               className="ml-6 text-stone-400 hover:text-white text-sm transition-colors"
@@ -349,7 +474,6 @@ export default function Dashboard() {
             </button>
           </div>
 
-          {/* Right side - user info */}
           <div className="flex items-center gap-3">
             {userName && (
               <button
@@ -397,48 +521,90 @@ export default function Dashboard() {
                 Manage your tabletop adventures or join a game your GM has
                 invited you to.
               </p>
-            </div>
-            <div className="flex flex-col gap-2 min-w-72">
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  placeholder="Campaign name…"
-                  value={newGameName}
-                  onChange={(e) => {
-                    setNewGameName(e.target.value);
-                    setError("");
-                  }}
-                  onKeyDown={(e) => e.key === "Enter" && createGame()}
-                  className="flex-1 bg-white/5 border border-white/10 focus:border-amber-500/50 rounded-xl px-4 py-2.5 text-sm text-white placeholder-stone-600 focus:outline-none focus:ring-2 focus:ring-amber-500/15 transition-all"
-                />
-                <button
-                  onClick={createGame}
-                  disabled={creating}
-                  className="px-5 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-sm font-semibold transition-all shadow-lg shadow-amber-900/30 disabled:opacity-50 whitespace-nowrap"
-                >
-                  {creating ? "…" : "+ New"}
-                </button>
-              </div>
-              {systems.length > 0 && (
-                <div className="flex items-center gap-2">
-                  <span className="text-stone-500 text-xs">System:</span>
-                  <div className="flex gap-1 flex-wrap">
-                    {systems.map((s) => (
+
+              {/* Plan info + storage bar */}
+              {planLimits && (
+                <div className="mt-5 flex flex-col gap-2 max-w-xs">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] text-white/30 uppercase tracking-widest">
+                      {planLimits.planName} plan
+                    </span>
+                    {!planLimits.isPaid && (
                       <button
-                        key={s.id}
-                        onClick={() => setSelectedSystemId(s.id)}
-                        className={`px-3 py-1 rounded-lg text-xs font-semibold border transition-all ${
-                          selectedSystemId === s.id
-                            ? "bg-amber-500/20 border-amber-500/50 text-amber-400"
-                            : "bg-white/5 border-white/10 text-stone-500 hover:text-white/70"
-                        }`}
+                        onClick={() => navigate("/plans")}
+                        className="text-[10px] text-amber-400/70 hover:text-amber-400 transition-colors underline underline-offset-2"
                       >
-                        {s.name}
+                        Upgrade
                       </button>
-                    ))}
+                    )}
                   </div>
+                  <StorageBar
+                    used={planLimits.storageUsed}
+                    limit={planLimits.storageLimit}
+                  />
+                  {/* Campaign count for free users */}
+                  {!planLimits.isPaid && (
+                    <p
+                      className={`text-[10px] ${atCampaignLimit ? "text-amber-400" : "text-white/25"}`}
+                    >
+                      {ownedCount} / {planLimits.maxCampaigns} campaigns used
+                    </p>
+                  )}
                 </div>
               )}
+            </div>
+
+            {/* Create campaign panel */}
+            <div className="flex flex-col gap-2 min-w-72">
+              {/* Limit banner replaces the form when at limit */}
+              {atCampaignLimit ? (
+                <LimitBanner onUpgrade={() => navigate("/plans")} />
+              ) : (
+                <>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      placeholder="Campaign name…"
+                      value={newGameName}
+                      onChange={(e) => {
+                        setNewGameName(e.target.value);
+                        setError("");
+                      }}
+                      onKeyDown={(e) => e.key === "Enter" && createGame()}
+                      className="flex-1 bg-white/5 border border-white/10 focus:border-amber-500/50 rounded-xl px-4 py-2.5 text-sm text-white placeholder-stone-600 focus:outline-none focus:ring-2 focus:ring-amber-500/15 transition-all"
+                    />
+                    <button
+                      onClick={createGame}
+                      disabled={creating}
+                      className="px-5 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-sm font-semibold transition-all shadow-lg shadow-amber-900/30 disabled:opacity-50 whitespace-nowrap"
+                    >
+                      {creating ? "…" : "+ New"}
+                    </button>
+                  </div>
+
+                  {systems.length > 0 && (
+                    <div className="flex items-center gap-2">
+                      <span className="text-stone-500 text-xs">System:</span>
+                      <div className="flex gap-1 flex-wrap">
+                        {systems.map((s) => (
+                          <button
+                            key={s.id}
+                            onClick={() => setSelectedSystemId(s.id)}
+                            className={`px-3 py-1 rounded-lg text-xs font-semibold border transition-all ${
+                              selectedSystemId === s.id
+                                ? "bg-amber-500/20 border-amber-500/50 text-amber-400"
+                                : "bg-white/5 border-white/10 text-stone-500 hover:text-white/70"
+                            }`}
+                          >
+                            {s.name}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+
               {error && <p className="text-red-400 text-xs px-1">{error}</p>}
             </div>
           </div>

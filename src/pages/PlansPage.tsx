@@ -306,6 +306,10 @@ export default function PlansPage() {
                     {plan.name === "Plus" && (
                       <Feature label="Dynamic Lighting" value="Unlocked" />
                     )}
+                    <Feature
+                      label="Campaign Limit"
+                      value={plan.name === "Free" ? "2" : "Unlimited"}
+                    />
                   </div>
 
                   {/* CTA */}

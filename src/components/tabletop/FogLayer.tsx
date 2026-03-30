@@ -6,6 +6,7 @@ import {
 } from "../../utils/Raycasting";
 import { useGameStore } from "../../store/gameStore";
 import { useMeasurementStore } from "../../store/MeasurementStore";
+import { tokenOffset } from "../../utils/GridUtils";
 import type { FogRegion, VisibilityMode } from "../../hooks/useFog";
 
 interface FogLayerProps {
@@ -50,7 +51,7 @@ export default function FogLayer({
 }: FogLayerProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const tokens = useGameStore((s) => s.tokens);
-  const gridSize = useGameStore((s) => s.sceneSettings.gridSize);
+  const { gridSize, gridType } = useGameStore((s) => s.sceneSettings);
   const feetPerSquare = useMeasurementStore((s) => s.feetPerSquare);
   // Default vision: 60ft in world units. Scales correctly with any gridSize/scale.
   const defaultVisionRadius = feetToWorld(60, gridSize, feetPerSquare);
@@ -123,11 +124,13 @@ export default function FogLayer({
             );
 
         for (const token of visibleTokens) {
-          const ox = token.x ?? 0;
-          const oy = token.y ?? 0;
-          // vision_radius is stored in world units (px).
-          // If not set, default to 60ft expressed in world units.
-          // darkvision is stored in feet and converted using current scale.
+          // Use the same center calculation as AuraLayer so vision is always
+          // anchored to the visual center of the token regardless of its size.
+          const size = token.token_size ?? 1;
+          const offset = tokenOffset(size, gridSize, gridType);
+          const ox = (token.x ?? 0) + offset;
+          const oy = (token.y ?? 0) + offset;
+
           const manualRadius =
             token.stats_json?.vision_radius != null
               ? token.stats_json.vision_radius
@@ -228,6 +231,7 @@ export default function FogLayer({
     brushRadius,
     isFogTool,
     gridSize,
+    gridType,
     feetPerSquare,
     defaultVisionRadius,
   ]);

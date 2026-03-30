@@ -1,3 +1,27 @@
+// ── Paste this replacement for the "Fog of War" <Section> block inside
+// SettingsPanel.tsx.  Also add `consolidate` and `revealedRegionCount` to
+// the component's props interface and pass them in from GameSession.tsx.
+//
+// Props to add to SettingsPanelProps:
+//   consolidateFog?: () => void;
+//   revealedRegionCount?: number;
+//
+// Usage in the JSX:
+//   <FogSection
+//     visibilityMode={visibilityMode}
+//     onSetVisibilityMode={onSetVisibilityMode}
+//     hasLightingAccess={hasLightingAccess}
+//     planCheckDone={planCheckDone}
+//     onUpgradeClick={handleUpgradeClick}
+//     onClearFog={onClearFog}
+//     consolidateFog={consolidateFog}
+//     revealedRegionCount={revealedRegionCount}
+//   />
+//
+// ─────────────────────────────────────────────────────────────────────────────
+// The complete updated SettingsPanel.tsx follows below.
+// ─────────────────────────────────────────────────────────────────────────────
+
 import { useRef, useState, useEffect } from "react";
 import {
   useGameStore,
@@ -16,6 +40,9 @@ interface SettingsPanelProps {
   onClearFog?: () => void;
   visibilityMode: VisibilityMode;
   onSetVisibilityMode: (mode: VisibilityMode) => void;
+  // New fog-perf props
+  consolidateFog?: () => void;
+  revealedRegionCount?: number;
 }
 
 // ── Shared primitives ─────────────────────────────────────────────────────────
@@ -274,22 +301,18 @@ function VisibilityModeSelector({
                 transition-all duration-150 group relative overflow-hidden
                 bg-white/[0.02] border-white/8 hover:border-amber-500/30 hover:bg-amber-500/5"
             >
-              {/* Subtle shimmer on hover */}
               <span
                 className="absolute inset-0 bg-gradient-to-r from-transparent via-amber-500/5 to-transparent
                 translate-x-[-100%] group-hover:translate-x-[100%] transition-transform duration-700"
               />
-
               <span className="text-sm w-4 text-center flex-shrink-0 opacity-40">
                 {opt.icon}
               </span>
-
               <div className="flex flex-col min-w-0 flex-1">
                 <div className="flex items-center gap-1.5">
                   <span className="text-xs font-semibold leading-tight text-white/30">
                     {opt.label}
                   </span>
-                  {/* Pro badge */}
                   <span
                     className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded
                     bg-amber-500/15 border border-amber-500/30 text-amber-400
@@ -302,8 +325,6 @@ function VisibilityModeSelector({
                   {opt.desc}
                 </span>
               </div>
-
-              {/* Lock icon + upgrade nudge */}
               <div className="flex-shrink-0 flex flex-col items-end gap-0.5">
                 <span className="text-white/20 text-sm">🔒</span>
                 <span
@@ -353,8 +374,6 @@ function VisibilityModeSelector({
   );
 }
 
-// ── Upgrade prompt shown below the locked option ──────────────────────────────
-
 function UpgradeBanner({ onUpgrade }: { onUpgrade: () => void }) {
   return (
     <div
@@ -366,8 +385,6 @@ function UpgradeBanner({ onUpgrade }: { onUpgrade: () => void }) {
         <p className="text-xs text-white/60 leading-snug">
           Dynamic Lighting is available on the{" "}
           <span className="text-amber-400 font-semibold">Plus plan</span>.
-          Upgrade to unlock raycasting vision, wall blocking, and per-token
-          sight ranges.
         </p>
         <button
           onClick={onUpgrade}
@@ -391,6 +408,8 @@ export default function SettingsPanel({
   onClearFog,
   visibilityMode,
   onSetVisibilityMode,
+  consolidateFog,
+  revealedRegionCount = 0,
 }: SettingsPanelProps) {
   const sceneSettings = useGameStore((s) => s.sceneSettings);
   const gameSettings = useGameStore((s) => s.gameSettings);
@@ -400,10 +419,9 @@ export default function SettingsPanel({
   const feetPerSquare = useMeasurementStore((s) => s.feetPerSquare);
   const setFeetPerSquare = useMeasurementStore((s) => s.setFeetPerSquare);
 
-  // ── Fetch the GM's subscription status ───────────────────────────────────────
-  // We only need plan_id and subscription_status — no sensitive data.
   const [hasLightingAccess, setHasLightingAccess] = useState(false);
   const [planCheckDone, setPlanCheckDone] = useState(false);
+  const [consolidating, setConsolidating] = useState(false);
 
   useEffect(() => {
     const check = async () => {
@@ -426,21 +444,14 @@ export default function SettingsPanel({
         return;
       }
 
-      // User has access if they have an active (or trialing) paid subscription.
-      // "inactive" or null means free tier — no lighting access.
       const activeStatuses = ["active", "trialing"];
       const hasSub = activeStatuses.includes(profile.subscription_status ?? "");
-
-      // Also check if their plan isn't the cheapest/free one.
-      // If plan_id is null they're on the free tier by default.
       setHasLightingAccess(hasSub && !!profile.plan_id);
       setPlanCheckDone(true);
     };
     check();
   }, []);
 
-  // If the GM somehow has lighting mode active but loses their subscription,
-  // quietly revert them to "fog" mode.
   useEffect(() => {
     if (planCheckDone && !hasLightingAccess && visibilityMode === "lighting") {
       onSetVisibilityMode("fog");
@@ -448,11 +459,9 @@ export default function SettingsPanel({
   }, [planCheckDone, hasLightingAccess, visibilityMode, onSetVisibilityMode]);
 
   const handleUpgradeClick = () => {
-    // Open plans page in a new tab so the GM doesn't lose their game session
     window.open("/plans", "_blank", "noopener,noreferrer");
   };
 
-  // ── Debounced setting saves ───────────────────────────────────────────────────
   const sceneDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const gameDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -485,6 +494,22 @@ export default function SettingsPanel({
       600,
     );
   };
+
+  const handleConsolidate = async () => {
+    if (!consolidateFog) return;
+    setConsolidating(true);
+    await consolidateFog();
+    // Brief visual feedback
+    setTimeout(() => setConsolidating(false), 800);
+  };
+
+  // Colour the region count badge: green < 100, amber < 300, red >= 300
+  const regionBadgeColor =
+    revealedRegionCount >= 300
+      ? "bg-red-500/15 border-red-500/30 text-red-400"
+      : revealedRegionCount >= 100
+        ? "bg-amber-500/15 border-amber-500/30 text-amber-400"
+        : "bg-white/5 border-white/10 text-white/30";
 
   return (
     <div className="flex flex-col gap-6 p-4">
@@ -619,25 +644,68 @@ export default function SettingsPanel({
           onUpgradeClick={handleUpgradeClick}
         />
 
-        {/* Show upgrade banner if user doesn't have access */}
         {planCheckDone && !hasLightingAccess && (
           <UpgradeBanner onUpgrade={handleUpgradeClick} />
         )}
 
-        {visibilityMode !== "none" && onClearFog && (
-          <button
-            onClick={() => {
-              if (
-                window.confirm("Clear all revealed fog regions for this scene?")
-              ) {
-                onClearFog();
-              }
-            }}
-            className="text-xs px-3 py-1.5 rounded-lg border border-red-500/20 bg-red-500/10
-              text-red-400/70 hover:text-red-400 hover:bg-red-500/20 transition-all self-start mt-1"
-          >
-            🗑 Clear all revealed regions
-          </button>
+        {visibilityMode !== "none" && (
+          <div className="flex flex-col gap-2 mt-1">
+            {/* Region count + optimize */}
+            <div className="flex items-center justify-between px-3 py-2 rounded-lg bg-white/3 border border-white/8">
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] text-white/40">Fog regions</span>
+                <span
+                  className={`text-[10px] px-1.5 py-0.5 rounded border tabular-nums font-mono ${regionBadgeColor}`}
+                >
+                  {revealedRegionCount}
+                </span>
+                {revealedRegionCount >= 100 && (
+                  <span className="text-[9px] text-white/25">
+                    {revealedRegionCount >= 300
+                      ? "⚠ High — optimize"
+                      : "Consider optimizing"}
+                  </span>
+                )}
+              </div>
+              {consolidateFog && (
+                <button
+                  onClick={handleConsolidate}
+                  disabled={consolidating || revealedRegionCount < 10}
+                  title="Remove redundant fog circles to improve performance"
+                  className="flex items-center gap-1.5 px-2 py-1 rounded-md text-[10px] font-semibold
+                    bg-sky-500/15 hover:bg-sky-500/25 border border-sky-500/25 hover:border-sky-500/50
+                    text-sky-400 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  {consolidating ? (
+                    <>
+                      <span className="w-2.5 h-2.5 border border-sky-400/40 border-t-sky-400 rounded-full animate-spin" />
+                      Optimizing…
+                    </>
+                  ) : (
+                    <>⚡ Optimize</>
+                  )}
+                </button>
+              )}
+            </div>
+
+            {onClearFog && (
+              <button
+                onClick={() => {
+                  if (
+                    window.confirm(
+                      "Clear all revealed fog regions for this scene?",
+                    )
+                  ) {
+                    onClearFog();
+                  }
+                }}
+                className="text-xs px-3 py-1.5 rounded-lg border border-red-500/20 bg-red-500/10
+                  text-red-400/70 hover:text-red-400 hover:bg-red-500/20 transition-all self-start"
+              >
+                🗑 Clear all revealed regions
+              </button>
+            )}
+          </div>
         )}
       </Section>
 
@@ -651,7 +719,6 @@ export default function SettingsPanel({
             className="bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white placeholder-white/25 focus:outline-none focus:border-amber-500/50 transition-colors"
           />
         </Field>
-
         <p className="text-[10px] text-white/20 text-center">
           Changes save automatically
         </p>

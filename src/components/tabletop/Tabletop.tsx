@@ -23,7 +23,17 @@ import type { VisibilityMode, FogRegion } from "../../hooks/useFog";
 
 const MIN_ZOOM = 0.3;
 const MAX_ZOOM = 3;
-const FOG_BRUSH_RADIUS = 120;
+
+// Brush size presets (world-unit radius).
+// Larger values reveal more area per stroke and produce fewer DB rows.
+const BRUSH_PRESETS = [
+  { label: "XS", radius: 60 },
+  { label: "S", radius: 120 },
+  { label: "M", radius: 220 },
+  { label: "L", radius: 380 },
+  { label: "XL", radius: 600 },
+];
+const DEFAULT_BRUSH_IDX = 1; // "S" — same as the old hardcoded 120
 
 interface Point {
   x: number;
@@ -77,10 +87,8 @@ interface TabletopProps {
   ) => void;
   onRemoveWall?: (id: string) => void;
   onToggleDoor?: (id: string) => void;
-  // Pings — received from useRealtimeGame and local sends
   pings?: import("./PingLayer").Ping[];
   onPing?: (x: number, y: number) => void;
-  // Fog — passed from GameSession which owns the single useFog call
   visibilityMode: VisibilityMode;
   revealedRegions: FogRegion[];
   onAddRevealedRegion: (cx: number, cy: number, radius: number) => void;
@@ -94,6 +102,65 @@ function snapWorld(x: number, y: number, gridSize: number, snap: boolean) {
     y: Math.round(y / gridSize) * gridSize,
   };
 }
+
+// ── Fog brush size HUD ────────────────────────────────────────────────────────
+// Shown as a floating pill above the canvas when a fog tool is active.
+
+interface BrushSizePickerProps {
+  selectedIdx: number;
+  onChange: (idx: number) => void;
+  activeTool: ActiveTool;
+}
+
+function BrushSizePicker({
+  selectedIdx,
+  onChange,
+  activeTool,
+}: BrushSizePickerProps) {
+  const isFog = activeTool === "fog_reveal" || activeTool === "fog_hide";
+  if (!isFog) return null;
+
+  return (
+    <div
+      className="absolute bottom-6 left-1/2 -translate-x-1/2 z-30
+        flex items-center gap-1 px-3 py-2 rounded-2xl
+        bg-black/70 backdrop-blur-md border border-white/15 shadow-2xl
+        pointer-events-auto select-none"
+    >
+      <span className="text-white/40 text-[10px] uppercase tracking-widest mr-1.5">
+        Brush
+      </span>
+      {BRUSH_PRESETS.map((p, i) => (
+        <button
+          key={p.label}
+          onClick={() => onChange(i)}
+          title={`Radius ${p.radius}px`}
+          className={`
+            flex items-center justify-center rounded-lg transition-all duration-150
+            text-xs font-bold
+            ${
+              i === selectedIdx
+                ? "bg-amber-500/30 border border-amber-500/60 text-amber-300 shadow-[0_0_8px_rgba(245,158,11,0.3)]"
+                : "bg-white/5 border border-white/10 text-white/40 hover:bg-white/10 hover:text-white/70"
+            }
+          `}
+          style={{
+            // Scale the button slightly with brush size so it's visually intuitive
+            width: `${22 + i * 4}px`,
+            height: `${22 + i * 4}px`,
+          }}
+        >
+          {p.label}
+        </button>
+      ))}
+      <span className="text-white/25 text-[10px] ml-1.5 tabular-nums">
+        r{BRUSH_PRESETS[selectedIdx].radius}
+      </span>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 export default function Tabletop({
   activeTool,
@@ -144,6 +211,15 @@ export default function Tabletop({
   const coneAngle = useMeasurementStore((s) => s.coneAngle);
   const lineWidth = useMeasurementStore((s) => s.lineWidth);
 
+  // ── Brush size ────────────────────────────────────────────────────────────────
+  const [brushPresetIdx, setBrushPresetIdx] = useState(DEFAULT_BRUSH_IDX);
+  const fogBrushRadius = BRUSH_PRESETS[brushPresetIdx].radius;
+  // Keep in a ref so mouse-event callbacks always see the latest value
+  const fogBrushRadiusRef = useRef(fogBrushRadius);
+  useEffect(() => {
+    fogBrushRadiusRef.current = fogBrushRadius;
+  }, [fogBrushRadius]);
+
   // ── Viewport ──────────────────────────────────────────────────────────────────
   const containerRef = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ width: 0, height: 0 });
@@ -185,12 +261,66 @@ export default function Tabletop({
   const [fogBrushPos, setFogBrushPos] = useState<Point | null>(null);
   const isFogTool = activeTool === "fog_reveal" || activeTool === "fog_hide";
 
+  // Pending fog operations queued during a drag stroke — flushed every 250 ms
+  // so we batch multiple brush positions into as few DB calls as possible.
+  // Each entry is { x, y, radius, reveal: bool }.
+  const pendingFogOps = useRef<
+    { x: number; y: number; radius: number; reveal: boolean }[]
+  >([]);
+  const fogFlushTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const flushFogOps = useCallback(() => {
+    const ops = pendingFogOps.current;
+    if (ops.length === 0) return;
+    pendingFogOps.current = [];
+
+    // Deduplicate: drop any op whose circle is fully contained inside a later op
+    // of the same type (larger brush already covers it).
+    const reveals = ops.filter((o) => o.reveal);
+    const hides = ops.filter((o) => !o.reveal);
+
+    const dedupe = (list: typeof ops) => {
+      const out: typeof ops = [];
+      for (const op of list) {
+        // If a later (larger or same) circle fully covers this one, skip it
+        const covered = list.some(
+          (other) =>
+            other !== op &&
+            other.radius >= op.radius &&
+            Math.hypot(other.x - op.x, other.y - op.y) + op.radius <=
+              other.radius,
+        );
+        if (!covered) out.push(op);
+      }
+      return out;
+    };
+
+    for (const op of dedupe(reveals)) {
+      onAddRevealedRegion(op.x, op.y, op.radius);
+    }
+    for (const op of dedupe(hides)) {
+      onRemoveRevealedRegion(op.x, op.y, op.radius);
+    }
+  }, [onAddRevealedRegion, onRemoveRevealedRegion]);
+
+  // Start/stop the flush interval with the fog tool
   useEffect(() => {
-    if (!isFogTool) {
+    if (isFogTool && isGM) {
+      fogFlushTimer.current = setInterval(flushFogOps, 250);
+    } else {
+      if (fogFlushTimer.current) {
+        clearInterval(fogFlushTimer.current);
+        fogFlushTimer.current = null;
+      }
+      // Flush any remaining ops when tool is deactivated
+      flushFogOps();
       setFogBrushPos(null);
       isFogBrushing.current = false;
     }
-  }, [isFogTool]);
+    return () => {
+      if (fogFlushTimer.current) clearInterval(fogFlushTimer.current);
+    };
+  }, [isFogTool, isGM, flushFogOps]);
 
   // ── Coordinate helpers ────────────────────────────────────────────────────────
   const screenToWorld = useCallback(
@@ -216,7 +346,7 @@ export default function Tabletop({
     if (isMeasureTool(activeTool)) return "crosshair";
     if (activeTool === "wall") return "crosshair";
     if (activeTool === "door") return "crosshair";
-    if (activeTool === "fog_reveal") return "none"; // custom canvas cursor
+    if (activeTool === "fog_reveal") return "none";
     if (activeTool === "fog_hide") return "none";
     return "default";
   }, [activeTool]);
@@ -229,7 +359,6 @@ export default function Tabletop({
       const pos = stage.getPointerPosition();
       if (!pos) return;
 
-      // Right-click: cancel wall drawing
       if (button === 2) {
         if (isWallTool) {
           setWallDrawStart(null);
@@ -241,7 +370,6 @@ export default function Tabletop({
 
       setContextMenu(null);
 
-      // Middle-mouse pan
       if (button === 1) {
         isPanning.current = true;
         lastPointer.current = { x: pos.x, y: pos.y };
@@ -287,12 +415,9 @@ export default function Tabletop({
         isFogBrushing.current = true;
         const world = screenToWorld(pos);
         lastFogPos.current = world;
-
-        if (activeTool === "fog_reveal") {
-          onAddRevealedRegion(world.x, world.y, FOG_BRUSH_RADIUS);
-        } else {
-          onRemoveRevealedRegion(world.x, world.y, FOG_BRUSH_RADIUS);
-        }
+        const radius = fogBrushRadiusRef.current;
+        const reveal = activeTool === "fog_reveal";
+        pendingFogOps.current.push({ x: world.x, y: world.y, radius, reveal });
         return;
       }
 
@@ -336,8 +461,6 @@ export default function Tabletop({
       snapMeasure,
       onAddWall,
       onRemoveWall,
-      onAddRevealedRegion,
-      onRemoveRevealedRegion,
       onMeasureChange,
       walls,
     ],
@@ -349,7 +472,6 @@ export default function Tabletop({
       const pos = e.target.getStage().getPointerPosition();
       if (!pos) return;
 
-      // Wall preview
       if (isGM && isWallTool && wallDrawStartRef.current) {
         const world = screenToWorld(pos);
         const snapped = snapWorld(world.x, world.y, gridSize, snapEnabled);
@@ -357,30 +479,34 @@ export default function Tabletop({
         return;
       }
 
-      // Fog brush — cursor preview + continuous paint on drag
+      // Fog brush — update cursor preview; queue op if dragging
       if (isGM && isFogTool) {
         const world = screenToWorld(pos);
         setFogBrushPos(world);
 
         if (isFogBrushing.current) {
           const last = lastFogPos.current;
-          const minDist = FOG_BRUSH_RADIUS * 0.5;
+          const radius = fogBrushRadiusRef.current;
+          // Only queue a new op when the cursor has moved at least half a radius
+          // — this dramatically reduces the number of circles stored per stroke.
+          const minDist = radius * 0.6;
           if (
             !last ||
             Math.hypot(world.x - last.x, world.y - last.y) > minDist
           ) {
             lastFogPos.current = world;
-            if (activeTool === "fog_reveal") {
-              onAddRevealedRegion(world.x, world.y, FOG_BRUSH_RADIUS);
-            } else {
-              onRemoveRevealedRegion(world.x, world.y, FOG_BRUSH_RADIUS);
-            }
+            const reveal = activeTool === "fog_reveal";
+            pendingFogOps.current.push({
+              x: world.x,
+              y: world.y,
+              radius,
+              reveal,
+            });
           }
         }
         return;
       }
 
-      // Measurement
       if (isMeasuring.current && measure) {
         const world = screenToWorld(pos);
         const snapped = snapMeasure(world.x, world.y);
@@ -390,7 +516,6 @@ export default function Tabletop({
         return;
       }
 
-      // Pan
       if (isPanning.current) {
         const dx = pos.x - lastPointer.current.x;
         const dy = pos.y - lastPointer.current.y;
@@ -414,8 +539,6 @@ export default function Tabletop({
       cameraY,
       panCamera,
       onMeasureChange,
-      onAddRevealedRegion,
-      onRemoveRevealedRegion,
     ],
   );
 
@@ -425,6 +548,8 @@ export default function Tabletop({
       if (isFogBrushing.current) {
         isFogBrushing.current = false;
         lastFogPos.current = null;
+        // Flush immediately on mouse-up so the final stroke lands right away
+        flushFogOps();
       }
       if (isMeasuring.current) {
         isMeasuring.current = false;
@@ -435,13 +560,19 @@ export default function Tabletop({
         e.target.getStage().container().style.cursor = getCursor();
       }
     },
-    [getCursor],
+    [getCursor, flushFogOps],
   );
 
   const handleMouseLeave = useCallback(() => {
-    if (isFogTool) setFogBrushPos(null);
-    isFogBrushing.current = false;
-  }, [isFogTool]);
+    if (isFogTool) {
+      setFogBrushPos(null);
+      if (isFogBrushing.current) {
+        isFogBrushing.current = false;
+        lastFogPos.current = null;
+        flushFogOps();
+      }
+    }
+  }, [isFogTool, flushFogOps]);
 
   useEffect(() => {
     if (!isMeasureTool(activeTool)) {
@@ -569,12 +700,21 @@ export default function Tabletop({
             visibilityMode={visibilityMode}
             revealedRegions={revealedRegions}
             brushPos={fogBrushPos}
-            brushRadius={FOG_BRUSH_RADIUS}
+            brushRadius={fogBrushRadius}
             isFogTool={isFogTool}
             zoom={zoom}
             cameraX={cameraX}
             cameraY={cameraY}
           />
+
+          {/* Brush size picker — only visible to GM when fog tool active */}
+          {isGM && (
+            <BrushSizePicker
+              selectedIdx={brushPresetIdx}
+              onChange={setBrushPresetIdx}
+              activeTool={activeTool}
+            />
+          )}
         </>
       )}
 

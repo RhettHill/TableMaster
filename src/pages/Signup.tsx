@@ -15,7 +15,7 @@ function GridBg() {
         }}
       />
       <div
-        className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[700px] h-[500px] rounded-full opacity-15"
+        className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-175 h-125 rounded-full opacity-15"
         style={{
           background: "radial-gradient(ellipse, #b45309 0%, transparent 70%)",
         }}
@@ -123,7 +123,7 @@ export default function Signup() {
         </div>
 
         {/* Card */}
-        <div className="rounded-2xl border border-white/8 bg-white/[0.03] backdrop-blur-sm p-8">
+        <div className="rounded-2xl border border-white/8 bg-white/3 backdrop-blur-sm p-8">
           <div className="flex flex-col gap-4">
             {[
               {
