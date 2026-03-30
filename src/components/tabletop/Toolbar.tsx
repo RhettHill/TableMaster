@@ -273,24 +273,28 @@ export default function Toolbar({
         {isGM && (
           <>
             <Divider />
-            <ToolButton
-              icon="🧱"
-              label="Draw Wall — click to place, right-click to finish"
-              active={activeTool === "wall"}
-              onClick={() => onToolChange("wall")}
-            />
-            <ToolButton
-              icon="🚪"
-              label="Draw Door — click to place door segments"
-              active={activeTool === "door"}
-              onClick={() => onToolChange("door")}
-            />
-            <ToolButton
-              icon="🗑"
-              label="Erase Walls/Doors"
-              active={activeTool === "erase"}
-              onClick={() => onToolChange("erase")}
-            />
+            {visibilityMode === "lighting" && (
+              <>
+                <ToolButton
+                  icon="🧱"
+                  label="Draw Wall — click to place, right-click to finish"
+                  active={activeTool === "wall"}
+                  onClick={() => onToolChange("wall")}
+                />
+                <ToolButton
+                  icon="🚪"
+                  label="Draw Door — click to place door segments"
+                  active={activeTool === "door"}
+                  onClick={() => onToolChange("door")}
+                />
+                <ToolButton
+                  icon="🗑"
+                  label="Erase Walls/Doors"
+                  active={activeTool === "erase"}
+                  onClick={() => onToolChange("erase")}
+                />
+              </>
+            )}
             <Divider />
             <ToolButton
               icon="👁"

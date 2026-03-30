@@ -276,6 +276,12 @@ export default function PlansPage() {
               TableMaster
             </button>
             <button
+              onClick={() => navigate("/calendar")}
+              className="ml-2 text-stone-400 hover:text-white text-sm transition-colors"
+            >
+              Calendar
+            </button>
+            <button
               onClick={() => navigate("/plans")}
               className="ml-6 text-amber-400 text-sm font-semibold transition-colors"
             >
@@ -414,8 +420,18 @@ export default function PlansPage() {
                       label="Campaigns"
                       value={isFree(plan) ? "2" : "Unlimited"}
                     />
+                    <Feature label="Campaign Scheduling" value="" />
                     {!isFree(plan) && (
-                      <Feature label="Dynamic Lighting" value="Unlocked" />
+                      <>
+                        <Feature label="No Ads" value="" />
+                        <Feature label="Dynamic Lighting" value="Unlocked" />
+                      </>
+                    )}
+                    {plan.name === "Pro" && (
+                      <>
+                        <Feature label="Animated Maps" value="Unlocked" />
+                        <Feature label="Asset Sharing" value="Unlocked" />
+                      </>
                     )}
                   </div>
 

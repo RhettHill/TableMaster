@@ -444,9 +444,11 @@ export default function SettingsPanel({
         return;
       }
 
-      const activeStatuses = ["active", "trialing"];
+      const activeStatuses = ["active", "trialing", "canceling"];
       const hasSub = activeStatuses.includes(profile.subscription_status ?? "");
-      setHasLightingAccess(hasSub && !!profile.plan_id);
+      setHasLightingAccess(
+        hasSub && (profile.plan_id === "plus" || profile.plan_id === "pro"),
+      );
       setPlanCheckDone(true);
     };
     check();

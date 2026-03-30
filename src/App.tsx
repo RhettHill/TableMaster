@@ -1,9 +1,12 @@
+import { HelmetProvider } from "react-helmet-async";
 import { Outlet } from "react-router-dom";
 
 export default function App() {
   return (
     <div>
-      <Outlet />
+      <HelmetProvider>
+        <Outlet />
+      </HelmetProvider>
     </div>
   );
 }

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../services/supabase";
+import { Helmet } from "react-helmet-async";
 
 // ── Animated grid background ──────────────────────────────────────────────────
 function GridBackground() {
@@ -132,6 +133,50 @@ export default function HomePage() {
       className="min-h-screen bg-[#0a0a0f] text-white overflow-x-hidden"
       style={{ fontFamily: "'Georgia', serif" }}
     >
+      <Helmet>
+        <title>TableMaster – Your Virtual Tabletop</title>
+        <meta
+          name="description"
+          content="TableMaster is a powerful virtual tabletop for Game Masters and players. Real-time maps, tokens, and dice to run the perfect session."
+        />
+        <meta
+          name="keywords"
+          content="virtual tabletop, VTT, D&D, RPG, online roleplay, TableMaster, Pathfinder2e"
+        />
+        {/* Open Graph / Facebook */}
+        <meta
+          property="og:title"
+          content="TableMaster – Your Virtual Tabletop"
+        />
+        <meta
+          property="og:description"
+          content="Real-time maps, tokens, dice – everything you need to run the perfect tabletop RPG session."
+        />
+        <meta property="og:type" content="website" />
+        <meta
+          property="og:url"
+          content="https://tablemaster.rhetthill3.workers.dev"
+        />
+        <meta
+          property="og:image"
+          content="https://tablemaster.rhetthill3.workers.dev/og-image.png"
+        />
+
+        {/* Twitter */}
+        <meta name="twitter:card" content="summary_large_image" />
+        <meta
+          name="twitter:title"
+          content="TableMaster – Your Virtual Tabletop"
+        />
+        <meta
+          name="twitter:description"
+          content="Real-time maps, tokens, dice – everything you need to run the perfect tabletop RPG session."
+        />
+        <meta
+          name="twitter:image"
+          content="https://tablemaster.rhetthill3.workers.dev/og-image.png"
+        />
+      </Helmet>
       <GridBackground />
 
       {/* Floating decorative dice */}
