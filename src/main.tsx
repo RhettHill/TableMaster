@@ -13,6 +13,7 @@ import GameSession from "./pages/GameSession";
 import InvitePage from "./pages/InvitePage";
 import ProfilePage from "./pages/ProfilePage";
 import PlansPage from "./pages/PlansPage";
+import CalendarPage from "./pages/CalanderPage";
 
 const router = createBrowserRouter([
   {
@@ -71,6 +72,14 @@ const router = createBrowserRouter([
         element: (
           <ProtectedRoute>
             <InvitePage />
+          </ProtectedRoute>
+        ),
+      },
+      {
+        path: "calendar",
+        element: (
+          <ProtectedRoute>
+            <CalendarPage />
           </ProtectedRoute>
         ),
       },

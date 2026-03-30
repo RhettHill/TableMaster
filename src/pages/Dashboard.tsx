@@ -178,11 +178,6 @@ function GameCard({
               {initials}
             </div>
           )}
-          {onIconUpload && (
-            <div className="absolute inset-0 bg-black/70 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center pointer-events-none">
-              <span className="text-white text-[11px] font-semibold">📷</span>
-            </div>
-          )}
         </div>
         {onIconUpload && (
           <input
@@ -465,6 +460,12 @@ export default function Dashboard() {
             >
               <span className="text-amber-500">⚔</span>
               TableMaster
+            </button>
+            <button
+              onClick={() => navigate("/calendar")}
+              className="ml-2 text-stone-400 hover:text-white text-sm transition-colors"
+            >
+              Calendar
             </button>
             <button
               onClick={() => navigate("/plans")}

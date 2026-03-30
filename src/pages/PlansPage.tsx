@@ -196,6 +196,12 @@ export default function PlansPage() {
               TableMaster
             </button>
             <button
+              onClick={() => navigate("/calendar")}
+              className="ml-2 text-stone-400 hover:text-white text-sm transition-colors"
+            >
+              Calendar
+            </button>
+            <button
               onClick={() => navigate("/plans")}
               className="ml-6 text-amber-400 text-sm font-semibold transition-colors"
             >
@@ -303,13 +309,22 @@ export default function PlansPage() {
                       label="Max file size"
                       value={formatBytes(plan.max_file_size)}
                     />
-                    {plan.name === "Plus" && (
-                      <Feature label="Dynamic Lighting" value="Unlocked" />
-                    )}
                     <Feature
                       label="Campaign Limit"
                       value={plan.name === "Free" ? "2" : "Unlimited"}
                     />
+                    {plan.name === "Plus" && (
+                      <Feature label="Dynamic Lighting" value="Unlocked" />
+                    )}
+
+                    {plan.name === "Pro" && (
+                      <>
+                        <Feature label="Dynamic Lighting" value="Unlocked" />
+
+                        <Feature label="Animated Maps" value="Unlocked" />
+                        <Feature label="Asset Transfers" value="Unlocked" />
+                      </>
+                    )}
                   </div>
 
                   {/* CTA */}
