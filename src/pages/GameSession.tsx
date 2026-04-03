@@ -97,7 +97,6 @@ export default function GameSession() {
   useEffect(() => {
     (window as any).__gameStoreTokens = _tokens;
   }, [_tokens]);
-  // Expose store for locate-token camera pan
   const _store = useGameStore;
   useEffect(() => {
     (window as any).__gameStore = _store;
@@ -124,8 +123,12 @@ export default function GameSession() {
   const [assigningTokenId, setAssigningTokenId] = useState<string | null>(null);
   const [assigningTokenName, setAssigningTokenName] = useState<string>("");
 
-  // ── Active scene ──────────────────────────────────────────────────────────────
+  // ── Active scenes ─────────────────────────────────────────────────────────────
+  // activeSceneId = what the GM is currently viewing (local only for GM)
+  // playerSceneId = what players are on (the DB-active scene)
   const [activeSceneId, setActiveSceneId] = useState<string | null>(null);
+  const [playerSceneId, setPlayerSceneId] = useState<string | null>(null);
+
   const activeSceneIdRef = useRef<string | null>(null);
 
   const updateActiveScene = useCallback((id: string | null) => {
@@ -133,10 +136,7 @@ export default function GameSession() {
     setActiveSceneId(id);
   }, []);
 
-  // ── Walls ─────────────────────────────────────────────────────────────────────
-
-  // ── Fog — single source of truth, shared by Tabletop + GMPanel ───────────────
-  // sendFogRef is set after useRealtimeGame (below) and passed into useFog's ref.
+  // ── Fog ───────────────────────────────────────────────────────────────────────
   const sendFogRef = useRef<
     ((e: import("../hooks/useFog").FogBroadcastEvent) => void) | null
   >(null);
@@ -145,8 +145,6 @@ export default function GameSession() {
     [],
   );
 
-  // handleWallBroadcast stable ref — useWalls is called AFTER useRealtimeGame
-  // so we forward through a ref to break the circular declaration dependency.
   const handleWallBroadcastRef = useRef<
     ((e: import("../hooks/useWalls").WallBroadcastEvent) => void) | null
   >(null);
@@ -155,6 +153,7 @@ export default function GameSession() {
       handleWallBroadcastRef.current?.(e),
     [],
   );
+
   const {
     visibilityMode,
     revealedRegions,
@@ -194,12 +193,24 @@ export default function GameSession() {
         mapWidth: scene.map_width ?? DEFAULT_SCENE_SETTINGS.mapWidth,
         mapHeight: scene.map_height ?? DEFAULT_SCENE_SETTINGS.mapHeight,
       });
-      // feet_per_square is stored on the scene so all clients share the same scale
       if ((scene as any).feet_per_square) {
         setFeetPerSquare((scene as any).feet_per_square);
       }
     },
     [setSceneSettings, setFeetPerSquare],
+  );
+
+  // ── Load tokens for a scene ───────────────────────────────────────────────────
+  const loadSceneTokens = useCallback(
+    async (sceneId: string) => {
+      const { data: tokenRows } = await supabase
+        .from("tokens")
+        .select("*")
+        .eq("scene_id", sceneId)
+        .order("created_at", { ascending: true });
+      setTokens(tokenRows ?? []);
+    },
+    [setTokens],
   );
 
   // ── Restore on mount ──────────────────────────────────────────────────────────
@@ -217,57 +228,54 @@ export default function GameSession() {
         setTokens([]);
         setSceneSettings(DEFAULT_SCENE_SETTINGS);
         updateActiveScene(null);
+        setPlayerSceneId(null);
         return;
       }
 
       const active = sceneRows.find((s: Scene) => s.active);
-      if (!active) {
-        setMap("/testmap.jpg");
-        setTokens([]);
-        setSceneSettings(DEFAULT_SCENE_SETTINGS);
-        updateActiveScene(null);
-        return;
-      }
+      const initialScene = active ?? sceneRows[0];
 
+      // Track which scene players are on separately from GM view
       updateActiveScene(active.id);
-      setMap(active.map_url ?? "/testmap.jpg");
-      applySceneSettings(active);
-      // useFog handles fog_enabled, visibility_mode, and revealedRegions
-      // automatically when activeSceneId changes — no manual loading needed.
+      setPlayerSceneId(active.id);
+      setMap(initialScene.map_url ?? "/testmap.jpg");
+      applySceneSettings(initialScene);
 
-      const { data: tokenRows } = await supabase
-        .from("tokens")
-        .select("*")
-        .eq("scene_id", active.id)
-        .order("created_at", { ascending: true });
-      setTokens(tokenRows ?? []);
+      await loadSceneTokens(initialScene.id);
     };
     restore();
   }, [gameId]);
 
-  // ── Scene switch ──────────────────────────────────────────────────────────────
-  const handleSceneSwitch = useCallback(
+  // ── GM: preview scene locally (no DB write, doesn't move players) ─────────────
+  const handleScenePreview = useCallback(
     async (scene: Scene) => {
       updateActiveScene(scene.id);
       setMap(scene.map_url ?? "/testmap.jpg");
       applySceneSettings(scene);
-      await dbSetActiveScene(scene.id);
-      // useFog reacts to activeSceneId change and reloads fog state automatically
-
-      const { data: tokenRows } = await supabase
-        .from("tokens")
-        .select("*")
-        .eq("scene_id", scene.id)
-        .order("created_at", { ascending: true });
-      setTokens(tokenRows ?? []);
+      await loadSceneTokens(scene.id);
     },
-    [
-      setMap,
-      dbSetActiveScene,
-      setTokens,
-      applySceneSettings,
-      updateActiveScene,
-    ],
+    [setMap, applySceneSettings, updateActiveScene, loadSceneTokens],
+  );
+
+  // ── GM: push players to a scene (sets DB active → realtime pushes players) ────
+  const handleScenePushToPlayers = useCallback(
+    async (scene: Scene) => {
+      await dbSetActiveScene(scene.id);
+      setPlayerSceneId(scene.id);
+    },
+    [dbSetActiveScene],
+  );
+
+  // ── Player: switch to new active scene (triggered by realtime) ────────────────
+  const handlePlayerSceneSwitch = useCallback(
+    async (scene: Scene) => {
+      updateActiveScene(scene.id);
+      setMap(scene.map_url ?? "/testmap.jpg");
+      applySceneSettings(scene);
+      setPlayerSceneId(scene.id);
+      await loadSceneTokens(scene.id);
+    },
+    [setMap, applySceneSettings, updateActiveScene, loadSceneTokens],
   );
 
   const [presenceUsers, setPresenceUsers] = useState<PresenceUser[]>([]);
@@ -303,7 +311,7 @@ export default function GameSession() {
     userId: user?.id ?? "",
     isGM,
     activeSceneId,
-    onSceneSwitch: handleSceneSwitch,
+    onSceneSwitch: handlePlayerSceneSwitch,
     onPresenceChange: setPresenceUsers,
     onFogBroadcast: handleFogBroadcast,
     onFogSceneUpdate: handleSceneUpdate,
@@ -311,13 +319,12 @@ export default function GameSession() {
     onWallBroadcast: handleWallBroadcastStable,
     onPing: handleRemotePing,
   });
-  // Wire the shared channel's sendFog into useFog's ref
-  // (useEffect runs after render so this is always set before any fog action)
+
   useEffect(() => {
     sendFogRef.current = sendFog;
   }, [sendFog]);
 
-  // ── Walls — uses shared channel via sendWall from useRealtimeGame ──────────
+  // ── Walls ──────────────────────────────────────────────────────────────────────
   const sendWallRef = useRef<
     ((e: import("../hooks/useWalls").WallBroadcastEvent) => void) | null
   >(null);
@@ -351,7 +358,6 @@ export default function GameSession() {
           bg_color: settings.bgColor,
           map_width: settings.mapWidth,
           map_height: settings.mapHeight,
-          // feet_per_square persisted so players receive it via postgres_changes
           ...(settings.feetPerSquare !== undefined
             ? { feet_per_square: settings.feetPerSquare }
             : {}),
@@ -392,10 +398,10 @@ export default function GameSession() {
     async (id: string, x: number, y: number) => {
       // Optimistic local update
       storeMoveToken(id, x, y);
-      // Broadcast position to all other clients instantly (GM + other players)
-      // This bypasses the postgres_changes round-trip and owner_id ambiguity
+      // Broadcast to ALL clients (GM and other players) via realtime channel
+      // This ensures the GM sees player token moves immediately without DB round-trip
       sendTokenMove(id, x, y);
-      // Also persist to DB (source of truth on reconnect/reload)
+      // Persist to DB
       await dbMoveToken(id, x, y);
     },
     [storeMoveToken, dbMoveToken, sendTokenMove],
@@ -444,8 +450,6 @@ export default function GameSession() {
         auras?: { radius: number; color: string; label?: string }[];
       },
     ) => {
-      // Cast to any: stats_json is JSONB and accepts our extended shape.
-      // The project TokenStats type may not include auras[] but the DB column does.
       storeUpdateToken(id, { stats_json: stats as any });
       await supabase
         .from("tokens")
@@ -501,8 +505,6 @@ export default function GameSession() {
   );
 
   const handleLocateToken = useCallback((id: string) => {
-    // Pan the camera so the token is centered in the viewport
-    // We import setZoomAndCamera from gameStore
     const tokens = (window as any).__gameStoreTokens ?? [];
     const token = tokens.find((t: any) => t.id === id);
     if (!token) return;
@@ -521,7 +523,6 @@ export default function GameSession() {
       const label = me?.displayName ?? (isGM ? "GM" : "Player");
       const color = isGM ? "#f59e0b" : "#60a5fa";
       const ping = sendPing(x, y, label, color);
-      // Show own ping locally immediately (broadcast echo skipped by senderId check)
       setPings((prev) => [...prev, { ...ping, label }]);
       setTimeout(
         () => setPings((prev) => prev.filter((p) => p.id !== ping.id)),
@@ -574,7 +575,7 @@ export default function GameSession() {
     [assigningTokenId, assignToToken, storeUpdateToken],
   );
 
-  // ── Prompt players to create sheet on first load ──────────────────────────────
+  // ── Auto-create sheet for players on first load ───────────────────────────────
   const sheetCheckDone = useRef(false);
   useEffect(() => {
     if (!gameId || !user || isGM) return;
@@ -649,7 +650,6 @@ export default function GameSession() {
         remoteMeasures={[...remoteMeasures.values()]}
         pings={pings}
         onPing={handlePing}
-        // Fog — passed from the single useFog call above
         visibilityMode={visibilityMode}
         revealedRegions={revealedRegions}
         onAddRevealedRegion={addRevealedRegion}
@@ -679,14 +679,15 @@ export default function GameSession() {
             userId={user.id}
             gameId={gameId}
             activeSceneId={activeSceneId}
-            onSceneSwitch={handleSceneSwitch}
+            playerSceneId={playerSceneId}
+            onScenePreview={handleScenePreview}
+            onScenePushToPlayers={handleScenePushToPlayers}
             onAddToken={handleAddToken}
             onSaveSceneSettings={handleSaveSceneSettings}
             onSaveGameSettings={handleSaveGameSettings}
             onClose={() => setGmPanelOpen(false)}
             onOpenStatBlock={setOpenStatBlockId}
             gameSystemSlug={gameSystemSlug}
-            // Fog — same useFog instance, so GM controls affect all clients
             onClearFog={clearFog}
             visibilityMode={visibilityMode}
             onSetVisibilityMode={setVisibilityMode}

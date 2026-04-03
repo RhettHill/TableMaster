@@ -14,6 +14,8 @@ import InvitePage from "./pages/InvitePage";
 import ProfilePage from "./pages/ProfilePage";
 import PlansPage from "./pages/PlansPage";
 import CalendarPage from "./pages/CalanderPage";
+import { SceneSettings, GameSettings } from "./store/gameStore";
+import { Token, VisibilityMode } from "./types/Types";
 
 const router = createBrowserRouter([
   {
@@ -24,6 +26,10 @@ const router = createBrowserRouter([
         // Public landing page — no auth required
         path: "home",
         element: <HomePage />,
+      },
+      {
+        path: "plans",
+        element: <PlansPage />,
       },
       {
         // Dashboard — protected, redirects to /home if not authed
@@ -40,14 +46,6 @@ const router = createBrowserRouter([
         element: (
           <ProtectedRoute>
             <ProfilePage />
-          </ProtectedRoute>
-        ),
-      },
-      {
-        path: "plans",
-        element: (
-          <ProtectedRoute>
-            <PlansPage />
           </ProtectedRoute>
         ),
       },

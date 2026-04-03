@@ -1,23 +1,23 @@
-import { create } from "zustand"
-import { Token, VisibilityMode } from "../types/Types"
+// src/store/gameStore.ts
+import { create } from "zustand";
+import { Token, VisibilityMode } from "../types/Types";
 
 export interface SceneSettings {
-  gridSize: number
-  gridOpacity: number
-  gridColor: string
-  gridType: "square" | "hex"
-  snapToGrid: boolean
-  bgColor: string
-  mapWidth: number
-  mapHeight: number
+  gridSize: number;
+  gridOpacity: number;
+  gridColor: string;
+  gridType: "square" | "hex";
+  snapToGrid: boolean;
+  bgColor: string;
+  mapWidth: number;
+  mapHeight: number;
 }
 
 export interface GameSettings {
-  gameName: string
-  defaultGridSize: number
-  bgColor: string
+  gameName: string;
+  defaultGridSize: number;
+  bgColor: string;
 }
-
 
 export const DEFAULT_SCENE_SETTINGS: SceneSettings = {
   gridSize: 70,
@@ -28,51 +28,62 @@ export const DEFAULT_SCENE_SETTINGS: SceneSettings = {
   bgColor: "#1a1a2e",
   mapWidth: 3500,
   mapHeight: 3500,
-}
+};
 
 export const DEFAULT_GAME_SETTINGS: GameSettings = {
   gameName: "",
   defaultGridSize: 70,
   bgColor: "#1a1a2e",
-}
+};
 
 interface GameState {
-  tokens: Token[]
-  map: string
-  zoom: number
-  cameraX: number
-  cameraY: number
-  sceneSettings: SceneSettings
-  gameSettings: GameSettings
-  visibilityMode: VisibilityMode// default
-  
+  tokens: Token[];
+  map: string;
+  /** MIME type of the active map asset — needed by MapLayer for GIF/video detection */
+  mapMimeType: string | null;
+  /** True when the active map is an animated GIF */
+  mapIsAnimated: boolean;
+  /** True when the active map is a video (mp4/webm) */
+  mapIsVideo: boolean;
+  zoom: number;
+  cameraX: number;
+  cameraY: number;
+  sceneSettings: SceneSettings;
+  gameSettings: GameSettings;
+  visibilityMode: VisibilityMode;
 
-  setTokens: (tokens: Token[]) => void
-  addToken: (token: Token) => void
-  moveToken: (id: string, x: number, y: number) => void
-  updateToken: (id: string, patch: Partial<Token>) => void
-  removeToken: (id: string) => void
-  setZoom: (zoom: number) => void
-  setCamera: (x: number, y: number) => void
-  panCamera: (x: number, y: number) => void
-  setZoomAndCamera: (zoom: number, x: number, y: number) => void
-  setMap: (map: string) => void
-  setSceneSettings: (settings: Partial<SceneSettings>) => void
-  setGameSettings: (settings: Partial<GameSettings>) => void
+  setTokens: (tokens: Token[]) => void;
+  addToken: (token: Token) => void;
+  moveToken: (id: string, x: number, y: number) => void;
+  updateToken: (id: string, patch: Partial<Token>) => void;
+  removeToken: (id: string) => void;
+  setZoom: (zoom: number) => void;
+  setCamera: (x: number, y: number) => void;
+  panCamera: (x: number, y: number) => void;
+  setZoomAndCamera: (zoom: number, x: number, y: number) => void;
+  setMap: (map: string, mimeType?: string | null, isAnimatedFallback?: boolean, isVideoFallback?: boolean) => void;
+  setSceneSettings: (settings: Partial<SceneSettings>) => void;
+  setGameSettings: (settings: Partial<GameSettings>) => void;
+  setVisibilityMode: (mode: VisibilityMode) => void;
 }
+
+const VIDEO_MIME = new Set(["video/mp4", "video/webm"]);
+const GIF_MIME = new Set(["image/gif"]);
 
 export const useGameStore = create<GameState>((set) => ({
   tokens: [],
   map: "/testmap.jpg",
+  mapMimeType: null,
+  mapIsAnimated: false,
+  mapIsVideo: false,
   zoom: 1,
   cameraX: 0,
   cameraY: 0,
   sceneSettings: DEFAULT_SCENE_SETTINGS,
   gameSettings: DEFAULT_GAME_SETTINGS,
-
-  // NEW visibility mode state
   visibilityMode: "fog",
-  setVisibilityMode: (mode:any) => set({ visibilityMode: mode }),
+
+  setVisibilityMode: (mode) => set({ visibilityMode: mode }),
 
   setTokens: (tokens) => set({ tokens }),
   addToken: (token) => set((state) => ({ tokens: [...state.tokens, token] })),
@@ -92,7 +103,26 @@ export const useGameStore = create<GameState>((set) => ({
   setCamera: (x, y) => set({ cameraX: x, cameraY: y }),
   panCamera: (x, y) => set({ cameraX: x, cameraY: y }),
   setZoomAndCamera: (zoom, x, y) => set({ zoom, cameraX: x, cameraY: y }),
-  setMap: (map) => set({ map }),
+
+  /**
+   * Set the active map URL and optionally its MIME type + animated flags.
+   * MapLayer uses mapIsAnimated / mapIsVideo to select the correct renderer
+   * without relying on file extensions (R2 URLs have no extension).
+   *
+   * Pass mimeType when available (most reliable).
+   * Pass isAnimated / isVideo as fallbacks when mimeType is null/unknown
+   * (e.g. loaded from DB asset row that has is_animated but no mime_type).
+   */
+  setMap: (map, mimeType = null, isAnimatedFallback = false, isVideoFallback = false) =>
+    set({
+      map,
+      mapMimeType: mimeType,
+      mapIsVideo: mimeType ? VIDEO_MIME.has(mimeType) : isVideoFallback,
+      mapIsAnimated: mimeType
+        ? GIF_MIME.has(mimeType)
+        : (isAnimatedFallback && !isVideoFallback),
+    }),
+
   setSceneSettings: (settings) =>
     set((state) => ({
       sceneSettings: { ...state.sceneSettings, ...settings },
@@ -101,4 +131,4 @@ export const useGameStore = create<GameState>((set) => ({
     set((state) => ({
       gameSettings: { ...state.gameSettings, ...settings },
     })),
-}))
+}));

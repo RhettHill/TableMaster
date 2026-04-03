@@ -25,7 +25,6 @@ interface FogLayerProps {
   cameraY: number;
 }
 
-// Convert feet to world units using current scene's gridSize and feetPerSquare scale
 function feetToWorld(
   feet: number,
   gridSize: number,
@@ -53,8 +52,8 @@ export default function FogLayer({
   const tokens = useGameStore((s) => s.tokens);
   const { gridSize, gridType } = useGameStore((s) => s.sceneSettings);
   const feetPerSquare = useMeasurementStore((s) => s.feetPerSquare);
-  // Default vision: 60ft in world units. Scales correctly with any gridSize/scale.
-  const defaultVisionRadius = feetToWorld(60, gridSize, feetPerSquare);
+  // Base vision radius at token_size = 1 (60ft)
+  const baseVisionRadius = feetToWorld(60, gridSize, feetPerSquare);
 
   const drawFog = useCallback(() => {
     const canvas = canvasRef.current;
@@ -74,7 +73,6 @@ export default function FogLayer({
 
     ctx.clearRect(0, 0, W, H);
 
-    // ── Fog rendering — active whenever mode is not "none" ────────────────────
     if (visibilityMode !== "none") {
       const off = document.createElement("canvas");
       off.width = W;
@@ -89,8 +87,7 @@ export default function FogLayer({
       offCtx.fillStyle = "rgba(0,0,0,1)";
       offCtx.fillRect(0, 0, mapWidth, mapHeight);
 
-      // ── Punch holes: GM-painted revealed regions ───────────────────────────
-      // Applied in both "fog" and "lighting" modes so GM pre-reveals stack
+      // Punch holes: GM-painted revealed regions
       if (revealedRegions.length > 0) {
         offCtx.globalCompositeOperation = "destination-out";
         for (const region of revealedRegions) {
@@ -111,7 +108,7 @@ export default function FogLayer({
         }
       }
 
-      // ── Punch holes: token vision (lighting mode only) ────────────────────
+      // Punch holes: token vision (lighting mode only)
       if (visibilityMode === "lighting") {
         offCtx.globalCompositeOperation = "destination-out";
 
@@ -124,22 +121,28 @@ export default function FogLayer({
             );
 
         for (const token of visibleTokens) {
-          // Use the same center calculation as AuraLayer so vision is always
-          // anchored to the visual center of the token regardless of its size.
           const size = token.token_size ?? 1;
           const offset = tokenOffset(size, gridSize, gridType);
           const ox = (token.x ?? 0) + offset;
           const oy = (token.y ?? 0) + offset;
 
+          // ── Scale vision radius with token size (same as auras) ────────────
+          // baseVisionRadius is for size=1; multiply by token_size so larger
+          // tokens have proportionally larger vision, matching aura scaling.
+          const scaledBaseRadius = baseVisionRadius * size;
+
+          // Manual override from stats_json also scales with token size
           const manualRadius =
             token.stats_json?.vision_radius != null
-              ? token.stats_json.vision_radius
-              : defaultVisionRadius;
+              ? token.stats_json.vision_radius * size
+              : scaledBaseRadius;
+
           const darkvisionFt = token.stats_json?.darkvision ?? 0;
           const darkvisionWorld =
             darkvisionFt > 0
-              ? feetToWorld(darkvisionFt, gridSize, feetPerSquare)
+              ? feetToWorld(darkvisionFt, gridSize, feetPerSquare) * size
               : 0;
+
           const visionRadius = Math.max(manualRadius, darkvisionWorld);
 
           let visPoints = computeVisibilityPolygon(
@@ -188,14 +191,13 @@ export default function FogLayer({
 
       offCtx.restore();
 
-      // GMs see fog at reduced opacity so the map is still visible underneath
       ctx.save();
       ctx.globalAlpha = isGM ? 0.45 : 1.0;
       ctx.drawImage(off, 0, 0);
       ctx.restore();
     }
 
-    // ── GM brush cursor preview ────────────────────────────────────────────────
+    // GM brush cursor preview
     if (isGM && isFogTool && brushPos) {
       const sx = brushPos.x * zoom + cameraX;
       const sy = brushPos.y * zoom + cameraY;
@@ -233,7 +235,7 @@ export default function FogLayer({
     gridSize,
     gridType,
     feetPerSquare,
-    defaultVisionRadius,
+    baseVisionRadius,
   ]);
 
   useEffect(() => {

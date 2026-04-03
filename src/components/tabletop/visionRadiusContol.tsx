@@ -2,14 +2,11 @@
  * VisionRadiusControl
  *
  * Shown in the toolbar for non-GM players when visibility mode is "lighting".
- * Lets the player set their own token's vision_radius (in world units) so the
- * dynamic lighting accurately reflects their character's sight range.
+ * Lets the player set their own token's vision_radius (in world units at scale=1)
+ * so the dynamic lighting accurately reflects their character's sight range.
  *
- * The control finds the player's own player_editable token and calls onEditStats
- * to persist the change — same path the GM uses, so it syncs to all clients.
- *
- * Preset values are in feet and converted to world units using the current
- * gridSize (5ft per square by default).
+ * Note: FogLayer multiplies the stored radius by token_size at render time,
+ * so we always store the radius for a size-1 token here.
  */
 import { useState, useCallback } from "react";
 import { useGameStore } from "../../store/gameStore";
@@ -32,7 +29,7 @@ interface VisionRadiusControlProps {
 
 // Standard D&D vision presets in feet
 const VISION_PRESETS_FT = [
-  { label: "Darkvision (60ft)", ft: 60 },
+  { label: "Normal (60ft)", ft: 60 },
   { label: "Darkvision (120ft)", ft: 120 },
   { label: "Blind", ft: 0 },
 ];
@@ -42,12 +39,6 @@ function feetToWorld(
   gridSize: number,
   feetPerSquare: number,
 ): number {
-  console.log({
-    feet,
-    gridSize,
-    feetPerSquare,
-    worldRadius: (feet * gridSize) / feetPerSquare,
-  });
   return (feet / feetPerSquare) * gridSize;
 }
 
@@ -63,29 +54,29 @@ export default function VisionRadiusControl({
   // Find this player's own editable token
   const myToken =
     tokens.find((t) => t.player_editable && t.owner_id === currentUserId) ??
-    tokens.find(
-      // Fallback: any player_editable token with no owner (assigned by GM)
-      (t) => t.player_editable && !t.owner_id,
-    );
+    tokens.find((t) => t.player_editable && !t.owner_id);
 
-  const currentRadiusWorld = myToken?.stats_json?.vision_radius ?? 0;
+  // vision_radius in store is stored at scale=1 world units
+  // Convert to feet for display
+  const storedRadiusWorld = myToken?.stats_json?.vision_radius ?? 0;
   const currentFt =
-    currentRadiusWorld > 0
-      ? Math.round((currentRadiusWorld / gridSize) * feetPerSquare)
+    storedRadiusWorld > 0
+      ? Math.round((storedRadiusWorld / gridSize) * feetPerSquare)
       : 0;
 
   const applyFeet = useCallback(
     (ft: number) => {
       if (!myToken) return;
+      // Store as scale-1 world units; FogLayer scales by token_size at render time
       const worldRadius = ft > 0 ? feetToWorld(ft, gridSize, feetPerSquare) : 0;
       const existing = myToken.stats_json;
       onEditStats(myToken.id, {
-        hp: existing!.hp ?? 0,
-        maxHp: existing!.maxHp ?? 0,
-        ac: existing!.ac ?? 10,
-        showStats: existing!.showStats ?? false,
+        hp: existing?.hp ?? 0,
+        maxHp: existing?.maxHp ?? 0,
+        ac: existing?.ac ?? 10,
+        showStats: existing?.showStats ?? false,
         vision_radius: worldRadius,
-        darkvision: existing!.darkvision ?? 0,
+        darkvision: existing?.darkvision ?? 0,
       });
       setOpen(false);
     },
@@ -115,7 +106,6 @@ export default function VisionRadiusControl({
         </span>
       </button>
 
-      {/* Tooltip label */}
       {!open && (
         <div className="absolute left-12 top-1/2 -translate-y-1/2 pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity duration-150 z-50">
           <div className="bg-black/90 border border-white/15 rounded-md px-2.5 py-1.5 whitespace-nowrap">
@@ -124,7 +114,6 @@ export default function VisionRadiusControl({
         </div>
       )}
 
-      {/* Dropdown */}
       {open && (
         <div
           className="absolute left-12 top-0 z-50 pointer-events-auto

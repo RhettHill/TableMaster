@@ -56,10 +56,16 @@ export default function PlansPage() {
 
   // ── Handle Stripe redirect back ──────────────────────────────────────────────
   useEffect(() => {
-    if (searchParams.get("success") === "true") {
+    if (searchParams.get("donation") === "true") {
       setToast({
         type: "success",
-        message: "🎉 Payment successful! Your plan has been activated.",
+        message: "💛 Thank you for supporting TableMaster!",
+      });
+      window.history.replaceState({}, "", "/plans");
+    } else if (searchParams.get("success") === "true") {
+      setToast({
+        type: "success",
+        message: "Payment successful! Your plan has been activated.",
       });
       window.history.replaceState({}, "", "/plans");
     } else if (searchParams.get("cancelled") === "true") {
@@ -150,6 +156,47 @@ export default function PlansPage() {
         message: err.message || "Something went wrong",
       });
       setCheckoutLoading(null);
+    }
+  };
+
+  const handleDonate = async (amount: number) => {
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      if (!session?.access_token) {
+        navigate("/login?redirect=/plans");
+        return;
+      }
+
+      const res = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/create-donation`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${session.access_token}`,
+          },
+          body: JSON.stringify({
+            amount,
+            successUrl: `${window.location.origin}/plans?donation=true`,
+            cancelUrl: `${window.location.origin}/plans?cancelled=true`,
+          }),
+        },
+      );
+
+      const data = await res.json();
+      if (!res.ok || !data.url) {
+        throw new Error(data.error || "Failed to start donation");
+      }
+
+      window.location.href = data.url;
+    } catch (err: any) {
+      setToast({
+        type: "error",
+        message: err.message || "Something went wrong",
+      });
     }
   };
 
@@ -471,6 +518,31 @@ export default function PlansPage() {
                 </div>
               );
             })}
+            <div
+              className={`group relative rounded-2xl border overflow-hidden flex flex-col transition-all duration-200`}
+            >
+              <div className="rounded-2xl border border-white/8 bg-white/[0.02] p-8 text-center">
+                <h2 className="text-2xl font-bold text-white mb-2">Donate</h2>
+                <p className="text-stone-400 text-sm mb-6 max-w-md mx-auto">
+                  TableMaster is built and maintained by a solo developer. If
+                  you enjoy using it, consider supporting its development 💛
+                </p>
+
+                <div className="flex flex-wrap justify-center gap-3">
+                  {[5, 10, 20].map((amount) => (
+                    <button
+                      key={amount}
+                      onClick={() => handleDonate(amount)}
+                      className="px-5 py-2.5 rounded-xl border border-amber-500/30
+            bg-amber-500/10 hover:bg-amber-500/20 text-amber-400
+            text-sm font-semibold transition-all"
+                    >
+                      Donate ${amount}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
           </div>
         )}
 

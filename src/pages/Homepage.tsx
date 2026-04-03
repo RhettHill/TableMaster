@@ -1,16 +1,11 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../services/supabase";
-import { Helmet } from "react-helmet-async";
 
-// ── Animated grid background ──────────────────────────────────────────────────
 function GridBackground() {
   return (
     <div className="absolute inset-0 overflow-hidden pointer-events-none">
-      {/* Base dark */}
       <div className="absolute inset-0 bg-[#0a0a0f]" />
-
-      {/* Subtle grid lines */}
       <div
         className="absolute inset-0 opacity-[0.04]"
         style={{
@@ -21,16 +16,12 @@ function GridBackground() {
           backgroundSize: "60px 60px",
         }}
       />
-
-      {/* Radial glow centre */}
       <div
         className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[900px] h-[600px] rounded-full opacity-20"
         style={{
           background: "radial-gradient(ellipse, #b45309 0%, transparent 70%)",
         }}
       />
-
-      {/* Corner vignettes */}
       <div
         className="absolute inset-0"
         style={{
@@ -42,7 +33,6 @@ function GridBackground() {
   );
 }
 
-// ── Floating dice decoration ──────────────────────────────────────────────────
 function FloatingDie({
   symbol,
   style,
@@ -60,33 +50,6 @@ function FloatingDie({
   );
 }
 
-// ── Feature card ──────────────────────────────────────────────────────────────
-function FeatureCard({
-  icon,
-  title,
-  desc,
-}: {
-  icon: string;
-  title: string;
-  desc: string;
-}) {
-  return (
-    <div className="group relative flex flex-col gap-3 p-6 rounded-2xl border border-white/6 bg-white/[0.02] hover:bg-white/[0.05] hover:border-amber-500/20 transition-all duration-300">
-      <div className="w-10 h-10 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-xl group-hover:bg-amber-500/20 transition-colors">
-        {icon}
-      </div>
-      <h3
-        className="text-white/90 font-semibold text-base"
-        style={{ fontFamily: "'Georgia', serif" }}
-      >
-        {title}
-      </h3>
-      <p className="text-stone-400 text-sm leading-relaxed">{desc}</p>
-    </div>
-  );
-}
-
-// ── Stat pill ─────────────────────────────────────────────────────────────────
 function StatPill({ value, label }: { value: string; label: string }) {
   return (
     <div className="flex flex-col items-center gap-1">
@@ -103,83 +66,130 @@ function StatPill({ value, label }: { value: string; label: string }) {
   );
 }
 
+// ── Feature grid cards ────────────────────────────────────────────────────────
+function FeatureCard({
+  icon,
+  title,
+  desc,
+  badge,
+}: {
+  icon: string;
+  title: string;
+  desc: string;
+  badge?: string;
+}) {
+  return (
+    <div className="group relative flex flex-col gap-3 p-6 rounded-2xl border border-white/6 bg-white/[0.02] hover:bg-white/[0.05] hover:border-amber-500/20 transition-all duration-300">
+      {badge && (
+        <span className="absolute top-4 right-4 text-[10px] px-2 py-0.5 rounded-full bg-amber-500/20 border border-amber-500/30 text-amber-400 font-bold uppercase tracking-wider">
+          {badge}
+        </span>
+      )}
+      <div className="w-10 h-10 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-xl group-hover:bg-amber-500/20 transition-colors">
+        {icon}
+      </div>
+      <h3
+        className="text-white/90 font-semibold text-base"
+        style={{ fontFamily: "'Georgia', serif" }}
+      >
+        {title}
+      </h3>
+      <p className="text-stone-400 text-sm leading-relaxed">{desc}</p>
+    </div>
+  );
+}
+
+// ── Spotlight feature row ─────────────────────────────────────────────────────
+function SpotlightRow({
+  icon,
+  title,
+  desc,
+  details,
+  reverse = false,
+  accent = "#b45309",
+}: {
+  icon: string;
+  title: string;
+  desc: string;
+  details: string[];
+  reverse?: boolean;
+  accent?: string;
+}) {
+  return (
+    <div
+      className={`flex flex-col ${reverse ? "md:flex-row-reverse" : "md:flex-row"} gap-8 md:gap-16 items-center`}
+    >
+      {/* Visual panel */}
+      <div className="flex-1 min-w-0">
+        <div
+          className="rounded-2xl border border-white/8 bg-white/[0.02] p-8 flex items-center justify-center"
+          style={{
+            minHeight: 200,
+            background: `radial-gradient(ellipse at 30% 50%, ${accent}18 0%, transparent 70%)`,
+          }}
+        >
+          <span
+            style={{
+              fontSize: "5rem",
+              filter: "drop-shadow(0 0 32px " + accent + "60)",
+            }}
+          >
+            <img src={icon} />
+          </span>
+        </div>
+      </div>
+      {/* Text */}
+      <div className="flex-1 min-w-0 flex flex-col gap-4">
+        <h3
+          className="text-2xl font-bold text-white"
+          style={{ fontFamily: "'Georgia', serif" }}
+        >
+          {title}
+        </h3>
+        <p className="text-stone-400 text-base leading-relaxed">{desc}</p>
+        <ul className="flex flex-col gap-2">
+          {details.map((d, i) => (
+            <li
+              key={i}
+              className="flex items-start gap-2 text-sm text-stone-400"
+            >
+              <span className="text-amber-500 mt-0.5 flex-shrink-0">◆</span>
+              {d}
+            </li>
+          ))}
+        </ul>
+      </div>
+    </div>
+  );
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────────
 export default function HomePage() {
   const navigate = useNavigate();
-  const [authed, setAuthed] = useState<boolean | null>(null); // null = loading
+  const [authed, setAuthed] = useState<boolean | null>(null);
+  const [visible, setVisible] = useState(false);
 
-  // If already signed in, redirect to dashboard
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
-      if (data.session?.user) {
-        navigate("/", { replace: true });
-      } else {
-        setAuthed(false);
-      }
+      if (data.session?.user) navigate("/", { replace: true });
+      else setAuthed(false);
     });
   }, []);
 
-  // Staggered reveal animation state
-  const [visible, setVisible] = useState(false);
   useEffect(() => {
     const t = setTimeout(() => setVisible(true), 100);
     return () => clearTimeout(t);
   }, []);
 
-  if (authed === null) return null; // brief loading, avoids flash
+  if (authed === null) return null;
 
   return (
     <div
       className="min-h-screen bg-[#0a0a0f] text-white overflow-x-hidden"
       style={{ fontFamily: "'Georgia', serif" }}
     >
-      <Helmet>
-        <title>TableMaster – Your Virtual Tabletop</title>
-        <meta
-          name="description"
-          content="TableMaster is a powerful virtual tabletop for Game Masters and players. Real-time maps, tokens, and dice to run the perfect session."
-        />
-        <meta
-          name="keywords"
-          content="virtual tabletop, VTT, D&D, RPG, online roleplay, TableMaster, Pathfinder2e"
-        />
-        {/* Open Graph / Facebook */}
-        <meta
-          property="og:title"
-          content="TableMaster – Your Virtual Tabletop"
-        />
-        <meta
-          property="og:description"
-          content="Real-time maps, tokens, dice – everything you need to run the perfect tabletop RPG session."
-        />
-        <meta property="og:type" content="website" />
-        <meta
-          property="og:url"
-          content="https://tablemaster.rhetthill3.workers.dev"
-        />
-        <meta
-          property="og:image"
-          content="https://tablemaster.rhetthill3.workers.dev/og-image.png"
-        />
-
-        {/* Twitter */}
-        <meta name="twitter:card" content="summary_large_image" />
-        <meta
-          name="twitter:title"
-          content="TableMaster – Your Virtual Tabletop"
-        />
-        <meta
-          name="twitter:description"
-          content="Real-time maps, tokens, dice – everything you need to run the perfect tabletop RPG session."
-        />
-        <meta
-          name="twitter:image"
-          content="https://tablemaster.rhetthill3.workers.dev/og-image.png"
-        />
-      </Helmet>
       <GridBackground />
 
-      {/* Floating decorative dice */}
       <FloatingDie
         symbol="⬡"
         style={{ top: "8%", left: "6%", transform: "rotate(-15deg)" }}
@@ -201,7 +211,7 @@ export default function HomePage() {
         style={{ top: "40%", right: "12%", transform: "rotate(5deg)" }}
       />
 
-      {/* ── Nav ─────────────────────────────────────────────────────────── */}
+      {/* ── Nav ───────────────────────────────────────────────────────────── */}
       <nav className="relative z-10 max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
         <div className="flex items-center gap-2.5">
           <span className="text-amber-500 text-xl">⚔</span>
@@ -223,14 +233,13 @@ export default function HomePage() {
             onClick={() => navigate("/signup")}
             className="px-5 py-2 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-sm font-semibold transition-all shadow-lg shadow-amber-900/30 hover:shadow-amber-900/50"
           >
-            Get started
+            Get started free
           </button>
         </div>
       </nav>
 
-      {/* ── Hero ────────────────────────────────────────────────────────── */}
+      {/* ── Hero ──────────────────────────────────────────────────────────── */}
       <section className="relative z-10 max-w-5xl mx-auto px-6 pt-20 pb-32 text-center">
-        {/* Badge */}
         <div
           className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full border border-amber-500/25 bg-amber-500/8 text-amber-400 text-xs font-semibold uppercase tracking-widest mb-8"
           style={{
@@ -240,10 +249,9 @@ export default function HomePage() {
           }}
         >
           <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
-          Virtual Tabletop
+          Virtual Tabletop — Free to Start
         </div>
 
-        {/* Headline */}
         <h1
           className="text-5xl sm:text-6xl md:text-7xl font-bold leading-[1.05] tracking-tight mb-6"
           style={{
@@ -256,15 +264,12 @@ export default function HomePage() {
           <br />
           <span
             className="text-amber-400"
-            style={{
-              textShadow: "0 0 80px rgba(180,83,9,0.6)",
-            }}
+            style={{ textShadow: "0 0 80px rgba(180,83,9,0.6)" }}
           >
             your table.
           </span>
         </h1>
 
-        {/* Subheading */}
         <p
           className="text-stone-400 text-lg sm:text-xl max-w-2xl mx-auto leading-relaxed mb-10"
           style={{
@@ -273,12 +278,11 @@ export default function HomePage() {
             transition: "opacity 0.7s ease 0.2s, transform 0.7s ease 0.2s",
           }}
         >
-          A powerful virtual tabletop built for Game Masters and their players.
-          Real-time maps, tokens, dice — everything you need to run the perfect
-          session.
+          A powerful virtual tabletop for Game Masters and their players.
+          Real-time maps, dynamic lighting, full character sheets, and dice —
+          all in one place.
         </p>
 
-        {/* CTA buttons */}
         <div
           className="flex flex-col sm:flex-row items-center justify-center gap-4"
           style={{
@@ -301,7 +305,6 @@ export default function HomePage() {
           </button>
         </div>
 
-        {/* Stats row */}
         <div
           className="flex items-center justify-center gap-12 mt-16 pt-12 border-t border-white/6"
           style={{
@@ -309,23 +312,100 @@ export default function HomePage() {
             transition: "opacity 0.8s ease 0.5s",
           }}
         >
-          <StatPill value="∞" label="Campaigns" />
-          <div className="w-px h-8 bg-white/8" />
-          <StatPill value="Live" label="Real-time sync" />
+          <StatPill value="Live" label="Support" />
           <div className="w-px h-8 bg-white/8" />
           <StatPill value="Free" label="To get started" />
         </div>
       </section>
 
-      {/* ── Features ────────────────────────────────────────────────────── */}
+      {/* ── Spotlight: Dynamic Lighting ────────────────────────────────────── */}
+      <section className="relative z-10 max-w-6xl mx-auto px-6 pb-28">
+        <div className="text-center mb-16">
+          <span className="text-amber-500/60 text-xs font-semibold uppercase tracking-widest">
+            Advanced Features
+          </span>
+          <h2 className="text-3xl sm:text-4xl font-bold text-white mt-2 mb-3">
+            Built for the serious GM
+          </h2>
+          <p className="text-stone-500 text-base max-w-xl mx-auto">
+            TableMaster goes beyond basic tokens and maps — it's a complete
+            toolkit.
+          </p>
+        </div>
+
+        <div className="flex flex-col gap-24">
+          {/* Dynamic Lighting */}
+          <SpotlightRow
+            icon="/fog.png"
+            title="Dynamic Lighting & Fog of War"
+            desc="Token-based vision with full raycasting against walls and doors. Your players only see what their characters can see — nothing more."
+            details={[
+              "Real-time raycasting against custom wall segments you draw",
+              "Doors players can open and close, instantly changing visible area",
+              "Configurable vision radius per token — darkvision, blindsight, custom ranges",
+              "GM-painted fog overlay mode for manual reveal without raycasting",
+              "Token vision scales correctly with token size",
+            ]}
+            accent="#b45309"
+          />
+
+          {/* Character Sheets */}
+          <SpotlightRow
+            icon="/sheet.png"
+            title="Full Character Sheets, In-Session"
+            desc="No tab-switching. Full D&D 5e and Pathfinder 2e character sheets open as floating panels directly in the game window."
+            details={[
+              "Complete D&D 5e sheet: ability scores, skills, spells, attacks, inventory",
+              "Full Pathfinder 2e sheet with actions, feats, and spell slots",
+              "HP and AC changes sync instantly to the token HP bar on the map",
+              "GM can view (but not edit) any player's sheet",
+              "Sheets persist between sessions and link to tokens automatically",
+            ]}
+            reverse
+            accent="#7c3aed"
+          />
+
+          {/* NPC Stat Blocks */}
+          <SpotlightRow
+            icon="/stats.png"
+            title="NPC Stat Block Library"
+            desc="Build a library of NPC stat blocks per campaign. Assign them to tokens with one click — HP and AC sync to the token automatically."
+            details={[
+              "D&D 5e Monster Manual-style stat blocks with full editing",
+              "Pathfinder 2e Bestiary format with action cost icons",
+              "Assign a stat block to any token — HP and AC populate instantly",
+              "GM-only notes field on every stat block",
+              "Draggable panel so you can view stats while running combat",
+            ]}
+            accent="#065f46"
+          />
+
+          {/* Measurement Tools */}
+          <SpotlightRow
+            icon="/measurments.png"
+            title="AoE Measurement Tools"
+            desc="Cast spells and measure distances with precision. Every measurement broadcasts to all players in real time."
+            details={[
+              "Ruler, circle, cone, line and square AoE tools",
+              "All shapes snap to grid with configurable snap mode (center or corner)",
+              "Cone angle adjustable from 15° to 180°",
+              "Each player's measurement shown in a different colour",
+              "Configurable grid scale (5ft, 10ft, or custom per scene)",
+            ]}
+            reverse
+            accent="#1e40af"
+          />
+        </div>
+      </section>
+
+      {/* ── Core feature grid ──────────────────────────────────────────────── */}
       <section className="relative z-10 max-w-6xl mx-auto px-6 pb-28">
         <div className="text-center mb-14">
           <h2 className="text-3xl sm:text-4xl font-bold text-white mb-3">
             Everything at the table
           </h2>
           <p className="text-stone-500 text-base max-w-xl mx-auto">
-            Built from the ground up for Game Masters who want control, and
-            players who want immersion.
+            Every feature a GM needs, nothing they don't.
           </p>
         </div>
 
@@ -333,37 +413,37 @@ export default function HomePage() {
           <FeatureCard
             icon="🗺"
             title="Scene Management"
-            desc="Create multiple scenes per campaign, each with its own map, grid, tokens and settings. Switch scenes and all players follow instantly."
+            desc="Create multiple scenes per campaign, each with its own map, grid, tokens and fog state. GM can preview scenes privately before pushing players to them."
           />
           <FeatureCard
             icon="🪙"
-            title="Tokens & HP Tracking"
-            desc="Place and move tokens on your map. Track HP, AC and visibility. Grant players control of their own character tokens."
-          />
-          <FeatureCard
-            icon="📏"
-            title="Measurement Tools"
-            desc="Ruler, cone, circle, line and square AoE tools with grid snapping. All measurements visible to every player in real time."
+            title="Tokens & Combat Tracking"
+            desc="Place tokens, track HP and AC with visual health bars, set vision ranges, add aura rings for spells and effects, and grant players control of their own tokens."
           />
           <FeatureCard
             icon="🎲"
             title="Built-in Dice Roller"
-            desc="Roll any combination of dice with a formula like 2d6+3. Draggable panel, natural 20 detection, full history."
+            desc="Roll any formula like 4d6kh3+2 with exploding dice, keep highest/lowest, modifiers and full history. Natural 20 detection built in."
           />
           <FeatureCard
             icon="👥"
             title="Real-time Multiplayer"
-            desc="Token positions, scene switches and map changes sync instantly across all connected players. See who's online with live presence."
+            desc="Token moves, scene switches, fog changes, and measurements sync instantly across all connected players. See who's online with live presence avatars."
+          />
+          <FeatureCard
+            icon="🧱"
+            title="Wall & Door Drawing"
+            desc="Draw wall segments directly on the map for dynamic lighting. Place doors that players can open and close to dynamically change their visible area."
           />
           <FeatureCard
             icon="⚙"
             title="Full Customisation"
-            desc="Square or hex grids, custom sizes, colors, background tints and fog. All settings saved automatically per scene."
+            desc="Square or hex grids, custom cell sizes, opacity, grid color, background tint, and map dimensions — all saved per scene automatically."
           />
         </div>
       </section>
 
-      {/* ── How it works ────────────────────────────────────────────────── */}
+      {/* ── How it works ──────────────────────────────────────────────────── */}
       <section className="relative z-10 max-w-4xl mx-auto px-6 pb-28">
         <div className="rounded-3xl border border-white/8 bg-white/[0.02] p-10 sm:p-14">
           <h2 className="text-3xl font-bold text-white text-center mb-10">
@@ -379,12 +459,12 @@ export default function HomePage() {
               {
                 step: "02",
                 title: "Build your campaign",
-                desc: "Add scenes, upload maps, place tokens and configure your grid.",
+                desc: "Add scenes, upload maps, place tokens, draw walls, and configure your grid.",
               },
               {
                 step: "03",
                 title: "Invite your players",
-                desc: "Share a single invite link. Players join instantly with their own account.",
+                desc: "Share a single invite link. Players join instantly and get their character sheet ready.",
               },
             ].map(({ step, title, desc }) => (
               <div key={step} className="flex flex-col gap-3">
@@ -399,7 +479,6 @@ export default function HomePage() {
               </div>
             ))}
           </div>
-
           <div className="flex justify-center mt-10">
             <button
               onClick={() => navigate("/signup")}
@@ -411,7 +490,7 @@ export default function HomePage() {
         </div>
       </section>
 
-      {/* ── Footer ──────────────────────────────────────────────────────── */}
+      {/* ── Footer ────────────────────────────────────────────────────────── */}
       <footer className="relative z-10 border-t border-white/6 py-8">
         <div className="max-w-6xl mx-auto px-6 flex flex-col sm:flex-row items-center justify-between gap-4">
           <div className="flex items-center gap-2">
@@ -419,6 +498,12 @@ export default function HomePage() {
             <span className="text-stone-500 text-sm">TableMaster</span>
           </div>
           <div className="flex items-center gap-6">
+            <button
+              onClick={() => navigate("/plans")}
+              className="text-stone-500 hover:text-stone-300 text-sm transition-colors"
+            >
+              Plans
+            </button>
             <button
               onClick={() => navigate("/login")}
               className="text-stone-500 hover:text-stone-300 text-sm transition-colors"

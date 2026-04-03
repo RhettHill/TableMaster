@@ -1,7 +1,5 @@
 /**
- * r2Storage — uploads files directly to Cloudflare R2 using presigned URLs.
- * Includes a client-side storage pre-check so users get a clear error
- * before the upload even starts (the server also enforces this).
+ * r2Storage — uploads, deletes, and shared-asset support for R2.
  */
 
 import { supabase } from "./supabase";
@@ -12,6 +10,8 @@ export interface UploadResult {
   publicUrl: string;
   key: string;
   path: string;
+  isAnimated: boolean;
+  shared: boolean;
 }
 
 export class StorageQuotaError extends Error {
@@ -29,93 +29,53 @@ export class StorageQuotaError extends Error {
   }
 }
 
-// ── Auth helper ───────────────────────────────────────────────────────────────
+export class ProPlanRequiredError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ProPlanRequiredError";
+  }
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
 async function getJWT(): Promise<string> {
   const { data: { session } } = await supabase.auth.getSession();
   if (session?.access_token) return session.access_token;
-
   const { data, error } = await supabase.auth.refreshSession();
   if (error || !data.session?.access_token) throw new Error("Not authenticated");
   return data.session.access_token;
 }
 
-// ── Pre-upload quota check ────────────────────────────────────────────────────
-// Runs before the presign request so the user gets an instant clear error
-// rather than a confusing server-side rejection mid-upload.
-
-async function checkStorageQuota(fileSize: number): Promise<void> {
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) throw new Error("Not authenticated");
-
-  const { data: profile } = await supabase
-    .from("profiles")
-    .select("storage_used, plan_id, subscription_status, plans(name, storage_limit, max_file_size)")
-    .eq("id", user.id)
-    .single();
-
-  if (!profile) return; // can't check, let the server decide
-
-  const plan = profile.plans as any;
-  if (!plan) return;
-
-  const storageUsed: number = profile.storage_used ?? 0;
-  const storageLimit: number = plan.storage_limit ?? Infinity;
-  const maxFileSize: number = plan.max_file_size ?? Infinity;
-  const planName: string = plan.name ?? "Free";
-
-  // Check individual file size limit
-  if (fileSize > maxFileSize) {
-    throw new StorageQuotaError(
-      `This file (${formatBytes(fileSize)}) exceeds the ${formatBytes(maxFileSize)} file size limit on the ${planName} plan.`,
-      { plan: planName, max_file_size: maxFileSize }
-    );
-  }
-
-  // Check total storage quota
-  if (storageUsed + fileSize > storageLimit) {
-    const remaining = Math.max(0, storageLimit - storageUsed);
-    throw new StorageQuotaError(
-      `Not enough storage. You have ${formatBytes(remaining)} remaining on the ${planName} plan.`,
-      { plan: planName, storage_used: storageUsed, storage_limit: storageLimit }
-    );
-  }
+/** Extract the R2 object key from a full public URL. */
+export function keyFromUrl(publicUrl: string): string | null {
+  const match = publicUrl.match(/\.r2\.dev\/(.+)$/);
+  return match ? match[1] : null;
 }
 
-// ── Upload to R2 (low-level) ──────────────────────────────────────────────────
-
-export async function uploadToR2(presignedUrl: string, file: File): Promise<void> {
-  const buffer = await file.arrayBuffer();
-  const blob = new Blob([buffer]);
-
-  const res = await fetch(presignedUrl, {
-    method: "PUT",
-    body: blob,
-    // No Content-Type header — prevents CORS preflight that R2 rejects
-  });
-
-  if (!res.ok) {
-    const text = await res.text();
-    console.error("R2 upload failed:", text);
-    throw new Error("Upload failed");
-  }
+export function isAnimatedType(mimeType: string): boolean {
+  return mimeType.startsWith("video/") || mimeType === "image/gif";
 }
 
-// ── Main upload pipeline ──────────────────────────────────────────────────────
+export function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1073741824) return `${(bytes / 1048576).toFixed(1)} MB`;
+  return `${(bytes / 1073741824).toFixed(2)} GB`;
+}
+
+// ── Upload ────────────────────────────────────────────────────────────────────
 
 export async function uploadFile(
   file: File,
   gameId: string,
-  onProgress?: (pct: number) => void
+  onProgress?: (pct: number) => void,
+  options: { shared?: boolean } = {},
 ): Promise<UploadResult> {
-  // 1. Client-side quota pre-check (fast, gives clear UX before any network call)
-  await checkStorageQuota(file.size);
-
-  // 2. Get JWT
   const token = await getJWT();
+  const fileType = file.type || "image/jpeg";
+  const { shared = false } = options;
 
-  // 3. Request presigned URL
-  const res = await fetch(
+  const presignRes = await fetch(
     `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/r2-presign`,
     {
       method: "POST",
@@ -124,48 +84,95 @@ export async function uploadFile(
         Authorization: `Bearer ${token}`,
       },
       body: JSON.stringify({
-        fileName: file.name || crypto.randomUUID(),
-        fileType: file.type || "application/octet-stream",
+        fileName: file.name || `upload.${fileType.split("/")[1] ?? "bin"}`,
+        fileType,
         fileSize: file.size,
         gameId,
+        shared,
       }),
     }
   );
 
-  if (!res.ok) {
-    const text = await res.text();
-    console.error("Presign failed:", text);
-
-    if (text.toLowerCase().includes("quota") || text.toLowerCase().includes("limit")) {
-      throw new StorageQuotaError("Storage quota exceeded", { plan: "unknown" });
+  if (!presignRes.ok) {
+    const data = await presignRes.json().catch(() => ({}));
+    if (presignRes.status === 403 && data.requiresPro) {
+      throw new ProPlanRequiredError(data.error ?? "Pro plan required");
     }
-
-    throw new Error("Failed to get presigned URL");
+    if (presignRes.status === 413 || (data.error ?? "").includes("quota")) {
+      throw new StorageQuotaError(data.error ?? "Storage quota exceeded", { plan: "unknown" });
+    }
+    throw new Error(`Presign failed ${presignRes.status}: ${JSON.stringify(data)}`);
   }
 
-  const data = await res.json();
-  const url = data.url || data.presignedUrl;
-  const path = data.path;
-  const publicUrl = data.publicUrl;
+  const { presignedUrl, contentType, key, publicUrl, isAnimated } = await presignRes.json();
+  if (!presignedUrl || !publicUrl) throw new Error("Invalid presign response");
 
-  if (!url) {
-    console.error("Invalid presign response:", data);
-    throw new Error("Presigned URL missing from response");
+  const putRes = await fetch(presignedUrl, {
+    method: "PUT",
+    headers: { "Content-Type": contentType ?? fileType },
+    body: file,
+  });
+
+  if (!putRes.ok) {
+    const text = await putRes.text();
+    throw new Error(`R2 PUT failed ${putRes.status}: ${text}`);
   }
-
-  // 4. Upload to R2
-  await uploadToR2(url, file);
 
   if (onProgress) onProgress(100);
-
-  return {
-    publicUrl: publicUrl ?? path,
-    key: path,
-    path,
-  };
+  return { publicUrl, key, path: key, isAnimated: isAnimated ?? false, shared };
 }
 
-// ── Storage info helpers ──────────────────────────────────────────────────────
+// ── Delete ────────────────────────────────────────────────────────────────────
+
+export async function deleteAssetFromR2(publicUrl: string): Promise<void> {
+  const key = keyFromUrl(publicUrl);
+  if (!key) { console.warn("[r2] Could not extract key from URL:", publicUrl); return; }
+  await deleteKeysFromR2([key]);
+}
+
+export async function deleteKeysFromR2(keys: string[]): Promise<void> {
+  if (keys.length === 0) return;
+  const token = await getJWT();
+  const res = await fetch(
+    `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/r2-delete`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ keys }),
+    }
+  );
+  if (!res.ok) {
+    console.error("[r2] Delete failed:", res.status, await res.text());
+  } else {
+    const data = await res.json();
+    if (data.failed > 0) console.warn("[r2] Some keys failed to delete:", data.errors);
+  }
+}
+
+/** Call this before deleting a game row to clean up all its R2 assets. */
+export async function deleteGameAssets(gameId: string): Promise<void> {
+  const { data, error } = await supabase.rpc("get_game_asset_keys", { p_game_id: gameId });
+  if (error) { console.error("[r2] Failed to fetch game asset keys:", error); return; }
+  const keys = (data as { key: string }[]).map((r) => r.key).filter(Boolean);
+  if (keys.length > 0) await deleteKeysFromR2(keys);
+}
+
+// ── Shared asset library ──────────────────────────────────────────────────────
+
+export async function linkSharedAssetToGame(assetId: string, gameId: string): Promise<boolean> {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return false;
+  const { error } = await supabase
+    .from("shared_asset_refs")
+    .upsert({ asset_id: assetId, game_id: gameId, added_by: user.id });
+  return !error;
+}
+
+export async function unlinkSharedAsset(assetId: string, gameId: string): Promise<void> {
+  await supabase.from("shared_asset_refs").delete().eq("asset_id", assetId).eq("game_id", gameId);
+}
+
+// ── Storage info ──────────────────────────────────────────────────────────────
 
 export interface StorageInfo {
   used: number;
@@ -181,25 +188,14 @@ export async function getStorageInfo(userId: string): Promise<StorageInfo | null
     .select("storage_used, plan_id, plans(name, storage_limit)")
     .eq("id", userId)
     .single();
-
   if (error || !data) return null;
-
   const plan = data.plans as any;
   const used = data.storage_used ?? 0;
   const limit = plan?.storage_limit ?? 104857600;
-
   return {
-    used,
-    limit,
+    used, limit,
     planId: data.plan_id,
     planName: plan?.name ?? "Free",
     pct: Math.min(100, Math.round((used / limit) * 100)),
   };
-}
-
-export function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1073741824) return `${(bytes / 1048576).toFixed(1)} MB`;
-  return `${(bytes / 1073741824).toFixed(2)} GB`;
 }

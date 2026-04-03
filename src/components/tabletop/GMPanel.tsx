@@ -18,7 +18,9 @@ interface GMPanelProps {
   userId: string;
   gameId: string;
   activeSceneId: string | null;
-  onSceneSwitch: (scene: Scene) => void;
+  playerSceneId?: string | null;
+  onScenePreview: (scene: Scene) => void;
+  onScenePushToPlayers: (scene: Scene) => Promise<void>;
   onAddToken: (token: Token) => void;
   onSaveSceneSettings: (settings: SceneSettings) => Promise<void>;
   onSaveGameSettings: (settings: GameSettings) => Promise<void>;
@@ -28,10 +30,9 @@ interface GMPanelProps {
   onClearFog?: () => void;
   visibilityMode: VisibilityMode;
   onSetVisibilityMode: (mode: VisibilityMode) => void;
-  // Token panel management
   onDeleteToken: (id: string) => void;
   onRenameToken: (id: string, name: string) => void;
-  onLocateToken: (id: string) => void; // pans camera to token
+  onLocateToken: (id: string) => void;
 }
 
 type Tab = "scenes" | "tokens" | "npcs" | "map" | "settings";
@@ -65,7 +66,9 @@ export default function GMPanel({
   userId,
   gameId,
   activeSceneId,
-  onSceneSwitch,
+  playerSceneId,
+  onScenePreview,
+  onScenePushToPlayers,
   onAddToken,
   onSaveSceneSettings,
   onSaveGameSettings,
@@ -86,14 +89,21 @@ export default function GMPanel({
   const [tokenSearch, setTokenSearch] = useState("");
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
+  const [pushingSceneId, setPushingSceneId] = useState<string | null>(null);
 
+  // Must call setMap (not just updateSceneMap) so Zustand store updates the
+  // map URL + derived mapIsAnimated / mapIsVideo flags that Tabletop reads.
   const setMap = useGameStore((s) => s.setMap);
   const tokens = useGameStore((s) => s.tokens);
 
   const {
     assets,
+    sharedLibrary,
     loading: assetsLoading,
+    isPro,
     uploadAsset,
+    addFromLibrary,
+    markAsShared,
     deleteAsset,
   } = useAssets(userId, gameId);
 
@@ -106,15 +116,26 @@ export default function GMPanel({
     updateSceneMap,
   } = useScenes(gameId);
 
-  const handleUpload = async (file: File, type: "map" | "token") => {
+  const handleUpload = async (file: File, options?: { shared?: boolean }) => {
     setUploading(true);
-    await uploadAsset(file, type);
+    await uploadAsset(file, picker ?? "map", options);
     setUploading(false);
   };
 
   const handleMapPick = async (asset: Asset) => {
-    setMap(asset.file_url);
+    // mime_type is the reliable source — set on upload via the metadata patch.
+    // is_animated is the fallback for assets uploaded before mime_type was stored.
+    // When is_animated=true but mime_type is unknown we can't distinguish GIF
+    // from video, so we treat it as video (MP4 is far more common as a map).
+    const mimeType = asset.mime_type ?? null;
+    const isVideoFallback = !mimeType && !!asset.is_animated;
+    const isAnimatedFallback = false; // only used for GIF; without mime_type we can't confirm
+
+    setMap(asset.file_url, mimeType, isAnimatedFallback, isVideoFallback);
+
+    // Persist to DB so the scene restores the correct map on reload.
     if (activeSceneId) await updateSceneMap(activeSceneId, asset.file_url);
+
     setPicker(null);
   };
 
@@ -140,6 +161,13 @@ export default function GMPanel({
     if (!name) return;
     await createScene(name);
     setNewSceneName("");
+  };
+
+  const handlePushToPlayers = async (e: React.MouseEvent, scene: Scene) => {
+    e.stopPropagation();
+    setPushingSceneId(scene.id);
+    await onScenePushToPlayers(scene);
+    setPushingSceneId(null);
   };
 
   return (
@@ -201,9 +229,20 @@ export default function GMPanel({
 
         {/* Content */}
         <div className="flex-1 overflow-y-auto">
-          {/* ── SCENES ────────────────────────────────────────────────────── */}
+          {/* ── SCENES ── */}
           {activeTab === "scenes" && (
             <div className="flex flex-col gap-3 p-4">
+              <div className="flex items-center gap-4 px-1">
+                <span className="flex items-center gap-1.5 text-[10px] text-white/30">
+                  <span className="w-2 h-2 rounded-full bg-amber-400 inline-block" />
+                  Your view
+                </span>
+                <span className="flex items-center gap-1.5 text-[10px] text-white/30">
+                  <span className="w-2 h-2 rounded-full bg-sky-400 inline-block" />
+                  Players' view
+                </span>
+              </div>
+
               <div className="flex gap-2">
                 <input
                   type="text"
@@ -237,34 +276,75 @@ export default function GMPanel({
                   No scenes yet
                 </p>
               ) : (
-                <div className="flex flex-col gap-1">
+                <div className="flex flex-col gap-1.5">
                   {scenes.map((scene) => {
-                    const isActive = scene.id === activeSceneId;
+                    const isGMHere = scene.id === activeSceneId;
+                    const isPlayerHere = scene.id === (playerSceneId ?? null);
+                    const isPushing = pushingSceneId === scene.id;
                     return (
                       <div
                         key={scene.id}
-                        onClick={() => onSceneSwitch(scene)}
-                        className={`group flex items-center gap-2 px-3 py-2.5 rounded-lg border text-sm cursor-pointer transition-all duration-150
+                        className={`group flex flex-col rounded-lg border transition-all duration-150 overflow-hidden
                           ${
-                            isActive
-                              ? "bg-amber-500/15 border-amber-500/30 text-amber-300"
-                              : "bg-white/4 border-white/8 text-white/60 hover:bg-white/8 hover:text-white/90"
+                            isGMHere
+                              ? "bg-amber-500/10 border-amber-500/25"
+                              : "bg-white/3 border-white/8 hover:bg-white/6"
                           }`}
                       >
-                        <span
-                          className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${isActive ? "bg-amber-400" : "bg-white/20"}`}
-                        />
-                        <span className="flex-1 truncate">{scene.name}</span>
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            if (window.confirm("Delete this scene?"))
-                              deleteScene(scene.id);
-                          }}
-                          className="opacity-0 group-hover:opacity-100 text-red-400/60 hover:text-red-400 transition-all text-xs"
+                        <div
+                          className="flex items-center gap-2 px-3 py-2.5 cursor-pointer"
+                          onClick={() => onScenePreview(scene)}
                         >
-                          ✕
-                        </button>
+                          <span
+                            title="Your current view"
+                            className={`w-2 h-2 rounded-full flex-shrink-0 ${isGMHere ? "bg-amber-400" : "bg-white/10"}`}
+                          />
+                          <span
+                            title="Players' current view"
+                            className={`w-2 h-2 rounded-full flex-shrink-0 ${isPlayerHere ? "bg-sky-400" : "bg-white/10"}`}
+                          />
+                          <span
+                            className={`flex-1 text-sm truncate ${isGMHere ? "text-amber-300 font-medium" : "text-white/65"}`}
+                          >
+                            {scene.name}
+                          </span>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (window.confirm("Delete this scene?"))
+                                deleteScene(scene.id);
+                            }}
+                            className="opacity-0 group-hover:opacity-100 text-red-400/60 hover:text-red-400 transition-all text-xs"
+                          >
+                            ✕
+                          </button>
+                        </div>
+
+                        <div
+                          className={`flex gap-1.5 px-3 pb-2 ${isGMHere ? "flex" : "hidden group-hover:flex"}`}
+                        >
+                          <button
+                            onClick={(e) => handlePushToPlayers(e, scene)}
+                            disabled={isPushing || isPlayerHere}
+                            className={`flex-1 py-1 rounded-md border text-[10px] font-semibold transition-all
+                              ${
+                                isPlayerHere
+                                  ? "bg-sky-500/10 border-sky-500/20 text-sky-400/50 cursor-default"
+                                  : "bg-sky-500/15 hover:bg-sky-500/25 border-sky-500/20 text-sky-400/80 hover:text-sky-300"
+                              } disabled:opacity-50`}
+                          >
+                            {isPushing ? (
+                              <span className="flex items-center justify-center gap-1">
+                                <span className="w-2.5 h-2.5 border border-sky-400/40 border-t-sky-400 rounded-full animate-spin" />
+                                Pushing…
+                              </span>
+                            ) : isPlayerHere ? (
+                              "✓ Players here"
+                            ) : (
+                              "→ Push to players"
+                            )}
+                          </button>
+                        </div>
                       </div>
                     );
                   })}
@@ -273,7 +353,7 @@ export default function GMPanel({
             </div>
           )}
 
-          {/* ── TOKENS ────────────────────────────────────────────────────── */}
+          {/* ── TOKENS ── */}
           {activeTab === "tokens" && (
             <div className="flex flex-col gap-2 p-3">
               {!activeSceneId && (
@@ -291,16 +371,13 @@ export default function GMPanel({
 
               {tokens.length > 0 && (
                 <>
-                  {/* Search */}
                   <input
                     type="text"
                     value={tokenSearch}
                     onChange={(e) => setTokenSearch(e.target.value)}
                     placeholder={`Search ${tokens.length} token${tokens.length !== 1 ? "s" : ""}…`}
-                    className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs
-                      text-white placeholder-white/25 focus:outline-none focus:border-amber-500/50 transition-colors"
+                    className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white placeholder-white/25 focus:outline-none focus:border-amber-500/50 transition-colors"
                   />
-
                   <div className="flex flex-col gap-0.5">
                     {tokens
                       .filter(
@@ -315,10 +392,8 @@ export default function GMPanel({
                         return (
                           <div
                             key={token.id}
-                            className="group flex items-center gap-2 px-2 py-1.5 rounded-lg
-                              bg-white/3 hover:bg-white/6 border border-white/6 transition-colors"
+                            className="group flex items-center gap-2 px-2 py-1.5 rounded-lg bg-white/3 hover:bg-white/6 border border-white/6 transition-colors"
                           >
-                            {/* Avatar */}
                             {token.image_url ? (
                               <img
                                 src={token.image_url}
@@ -329,8 +404,6 @@ export default function GMPanel({
                                 {token.name?.charAt(0) ?? "?"}
                               </div>
                             )}
-
-                            {/* Name / rename input */}
                             {isRenaming ? (
                               <input
                                 autoFocus
@@ -348,8 +421,7 @@ export default function GMPanel({
                                     onRenameToken(token.id, renameValue);
                                   setRenamingId(null);
                                 }}
-                                className="flex-1 min-w-0 bg-white/10 border border-amber-500/40 rounded px-2 py-0.5
-                                  text-xs text-white focus:outline-none"
+                                className="flex-1 min-w-0 bg-white/10 border border-amber-500/40 rounded px-2 py-0.5 text-xs text-white focus:outline-none"
                               />
                             ) : (
                               <span
@@ -363,49 +435,36 @@ export default function GMPanel({
                                 {token.name}
                               </span>
                             )}
-
-                            {/* Visibility dot */}
                             <span
                               className={`text-[10px] flex-shrink-0 ${token.visible ? "text-green-400/60" : "text-white/20"}`}
                             >
                               {token.visible ? "●" : "○"}
                             </span>
-
-                            {/* Action buttons — show on hover */}
                             <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
-                              {/* Locate (pan to) */}
                               <button
                                 title="Pan to token"
                                 onClick={() => onLocateToken(token.id)}
-                                className="w-6 h-6 rounded flex items-center justify-center
-                                  text-white/30 hover:text-sky-400 hover:bg-sky-500/10 transition-colors text-xs"
+                                className="w-6 h-6 rounded flex items-center justify-center text-white/30 hover:text-sky-400 hover:bg-sky-500/10 transition-colors text-xs"
                               >
                                 ◎
                               </button>
-                              {/* Rename */}
                               <button
                                 title="Rename"
                                 onClick={() => {
                                   setRenamingId(token.id);
                                   setRenameValue(token.name ?? "");
                                 }}
-                                className="w-6 h-6 rounded flex items-center justify-center
-                                  text-white/30 hover:text-amber-400 hover:bg-amber-500/10 transition-colors text-xs"
+                                className="w-6 h-6 rounded flex items-center justify-center text-white/30 hover:text-amber-400 hover:bg-amber-500/10 transition-colors text-xs"
                               >
                                 ✎
                               </button>
-                              {/* Delete */}
                               <button
-                                title="Delete token"
+                                title="Delete"
                                 onClick={() => {
-                                  if (
-                                    window.confirm(`Delete "${token.name}"?`)
-                                  ) {
+                                  if (window.confirm(`Delete "${token.name}"?`))
                                     onDeleteToken(token.id);
-                                  }
                                 }}
-                                className="w-6 h-6 rounded flex items-center justify-center
-                                  text-white/30 hover:text-red-400 hover:bg-red-500/10 transition-colors text-xs"
+                                className="w-6 h-6 rounded flex items-center justify-center text-white/30 hover:text-red-400 hover:bg-red-500/10 transition-colors text-xs"
                               >
                                 ✕
                               </button>
@@ -413,21 +472,9 @@ export default function GMPanel({
                           </div>
                         );
                       })}
-
-                    {tokenSearch &&
-                      tokens.filter((t) =>
-                        t.name
-                          ?.toLowerCase()
-                          .includes(tokenSearch.toLowerCase()),
-                      ).length === 0 && (
-                        <p className="text-white/25 text-xs text-center py-3">
-                          No tokens match "{tokenSearch}"
-                        </p>
-                      )}
                   </div>
                 </>
               )}
-
               {tokens.length === 0 && activeSceneId && (
                 <p className="text-white/20 text-xs text-center py-4">
                   No tokens on this scene
@@ -436,7 +483,7 @@ export default function GMPanel({
             </div>
           )}
 
-          {/* ── MAP ───────────────────────────────────────────────────────── */}
+          {/* ── MAP ── */}
           {activeTab === "map" && (
             <div className="flex flex-col gap-3 p-4">
               {!activeSceneId && (
@@ -454,7 +501,7 @@ export default function GMPanel({
             </div>
           )}
 
-          {/* ── NPCS ─────────────────────────────────────────────────────── */}
+          {/* ── NPCS ── */}
           {activeTab === "npcs" && (
             <div className="p-3">
               <NpcLibraryPanel
@@ -465,7 +512,7 @@ export default function GMPanel({
             </div>
           )}
 
-          {/* ── SETTINGS ──────────────────────────────────────────────────── */}
+          {/* ── SETTINGS ── */}
           {activeTab === "settings" && (
             <SettingsPanel
               gameId={gameId}
@@ -483,13 +530,16 @@ export default function GMPanel({
       {picker && (
         <AssetPicker
           assets={assets}
+          sharedLibrary={sharedLibrary}
           loading={assetsLoading}
           uploading={uploading}
           title={picker === "map" ? "Choose a Map" : "Choose a Token"}
           type={picker}
+          isPro={isPro}
           onSelect={picker === "map" ? handleMapPick : handleTokenPick}
-          onUpload={(file) => handleUpload(file, picker)}
+          onUpload={handleUpload}
           onDelete={deleteAsset}
+          onAddFromLibrary={addFromLibrary}
           onClose={() => setPicker(null)}
         />
       )}

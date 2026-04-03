@@ -1,6 +1,6 @@
 import { Stage, Layer, Group } from "react-konva";
 import { useEffect, useRef, useState, useCallback } from "react";
-import MapLayer from "./MapLayer";
+import MapLayer, { VideoMapOverlay } from "./MapLayer";
 import GridLayer from "./GridLayer";
 import TokenLayer from "./TokenLayer";
 import MeasureLayer, { MeasureState } from "./MeasureLayer";
@@ -24,8 +24,6 @@ import type { VisibilityMode, FogRegion } from "../../hooks/useFog";
 const MIN_ZOOM = 0.3;
 const MAX_ZOOM = 3;
 
-// Brush size presets (world-unit radius).
-// Larger values reveal more area per stroke and produce fewer DB rows.
 const BRUSH_PRESETS = [
   { label: "XS", radius: 60 },
   { label: "S", radius: 120 },
@@ -33,7 +31,7 @@ const BRUSH_PRESETS = [
   { label: "L", radius: 380 },
   { label: "XL", radius: 600 },
 ];
-const DEFAULT_BRUSH_IDX = 1; // "S" — same as the old hardcoded 120
+const DEFAULT_BRUSH_IDX = 1;
 
 interface Point {
   x: number;
@@ -103,9 +101,6 @@ function snapWorld(x: number, y: number, gridSize: number, snap: boolean) {
   };
 }
 
-// ── Fog brush size HUD ────────────────────────────────────────────────────────
-// Shown as a floating pill above the canvas when a fog tool is active.
-
 interface BrushSizePickerProps {
   selectedIdx: number;
   onChange: (idx: number) => void;
@@ -119,14 +114,8 @@ function BrushSizePicker({
 }: BrushSizePickerProps) {
   const isFog = activeTool === "fog_reveal" || activeTool === "fog_hide";
   if (!isFog) return null;
-
   return (
-    <div
-      className="absolute bottom-6 left-1/2 -translate-x-1/2 z-30
-        flex items-center gap-1 px-3 py-2 rounded-2xl
-        bg-black/70 backdrop-blur-md border border-white/15 shadow-2xl
-        pointer-events-auto select-none"
-    >
+    <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1 px-3 py-2 rounded-2xl bg-black/70 backdrop-blur-md border border-white/15 shadow-2xl pointer-events-auto select-none">
       <span className="text-white/40 text-[10px] uppercase tracking-widest mr-1.5">
         Brush
       </span>
@@ -135,20 +124,12 @@ function BrushSizePicker({
           key={p.label}
           onClick={() => onChange(i)}
           title={`Radius ${p.radius}px`}
-          className={`
-            flex items-center justify-center rounded-lg transition-all duration-150
-            text-xs font-bold
-            ${
-              i === selectedIdx
-                ? "bg-amber-500/30 border border-amber-500/60 text-amber-300 shadow-[0_0_8px_rgba(245,158,11,0.3)]"
-                : "bg-white/5 border border-white/10 text-white/40 hover:bg-white/10 hover:text-white/70"
-            }
-          `}
-          style={{
-            // Scale the button slightly with brush size so it's visually intuitive
-            width: `${22 + i * 4}px`,
-            height: `${22 + i * 4}px`,
-          }}
+          className={`flex items-center justify-center rounded-lg transition-all duration-150 text-xs font-bold ${
+            i === selectedIdx
+              ? "bg-amber-500/30 border border-amber-500/60 text-amber-300"
+              : "bg-white/5 border border-white/10 text-white/40 hover:bg-white/10 hover:text-white/70"
+          }`}
+          style={{ width: `${22 + i * 4}px`, height: `${22 + i * 4}px` }}
         >
           {p.label}
         </button>
@@ -159,8 +140,6 @@ function BrushSizePicker({
     </div>
   );
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
 
 export default function Tabletop({
   activeTool,
@@ -196,8 +175,11 @@ export default function Tabletop({
   const cameraX = useGameStore((s) => s.cameraX);
   const cameraY = useGameStore((s) => s.cameraY);
   const map = useGameStore((s) => s.map);
+  const mapIsAnimated = useGameStore((s) => s.mapIsAnimated);
+  const mapIsVideo = useGameStore((s) => s.mapIsVideo);
   const setZoomAndCamera = useGameStore((s) => s.setZoomAndCamera);
   const panCamera = useGameStore((s) => s.panCamera);
+
   const {
     gridSize,
     gridType,
@@ -211,16 +193,13 @@ export default function Tabletop({
   const coneAngle = useMeasurementStore((s) => s.coneAngle);
   const lineWidth = useMeasurementStore((s) => s.lineWidth);
 
-  // ── Brush size ────────────────────────────────────────────────────────────────
   const [brushPresetIdx, setBrushPresetIdx] = useState(DEFAULT_BRUSH_IDX);
   const fogBrushRadius = BRUSH_PRESETS[brushPresetIdx].radius;
-  // Keep in a ref so mouse-event callbacks always see the latest value
   const fogBrushRadiusRef = useRef(fogBrushRadius);
   useEffect(() => {
     fogBrushRadiusRef.current = fogBrushRadius;
   }, [fogBrushRadius]);
 
-  // ── Viewport ──────────────────────────────────────────────────────────────────
   const containerRef = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ width: 0, height: 0 });
   useEffect(() => {
@@ -234,14 +213,10 @@ export default function Tabletop({
     return () => observer.disconnect();
   }, []);
 
-  // ── Context menu ──────────────────────────────────────────────────────────────
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
-
-  // ── Measurement ───────────────────────────────────────────────────────────────
   const [measure, setMeasure] = useState<MeasureState | null>(null);
   const isMeasuring = useRef(false);
 
-  // ── Wall drawing ──────────────────────────────────────────────────────────────
   const [wallDrawStart, setWallDrawStart] = useState<Point | null>(null);
   const [wallMousePos, setWallMousePos] = useState<Point | null>(null);
   const wallDrawStartRef = useRef<Point | null>(null);
@@ -255,15 +230,11 @@ export default function Tabletop({
     }
   }, [isWallTool]);
 
-  // ── Fog brush ─────────────────────────────────────────────────────────────────
   const isFogBrushing = useRef(false);
   const lastFogPos = useRef<Point | null>(null);
   const [fogBrushPos, setFogBrushPos] = useState<Point | null>(null);
   const isFogTool = activeTool === "fog_reveal" || activeTool === "fog_hide";
 
-  // Pending fog operations queued during a drag stroke — flushed every 250 ms
-  // so we batch multiple brush positions into as few DB calls as possible.
-  // Each entry is { x, y, radius, reveal: bool }.
   const pendingFogOps = useRef<
     { x: number; y: number; radius: number; reveal: boolean }[]
   >([]);
@@ -273,16 +244,11 @@ export default function Tabletop({
     const ops = pendingFogOps.current;
     if (ops.length === 0) return;
     pendingFogOps.current = [];
-
-    // Deduplicate: drop any op whose circle is fully contained inside a later op
-    // of the same type (larger brush already covers it).
     const reveals = ops.filter((o) => o.reveal);
     const hides = ops.filter((o) => !o.reveal);
-
     const dedupe = (list: typeof ops) => {
       const out: typeof ops = [];
       for (const op of list) {
-        // If a later (larger or same) circle fully covers this one, skip it
         const covered = list.some(
           (other) =>
             other !== op &&
@@ -294,16 +260,12 @@ export default function Tabletop({
       }
       return out;
     };
-
-    for (const op of dedupe(reveals)) {
+    for (const op of dedupe(reveals))
       onAddRevealedRegion(op.x, op.y, op.radius);
-    }
-    for (const op of dedupe(hides)) {
+    for (const op of dedupe(hides))
       onRemoveRevealedRegion(op.x, op.y, op.radius);
-    }
   }, [onAddRevealedRegion, onRemoveRevealedRegion]);
 
-  // Start/stop the flush interval with the fog tool
   useEffect(() => {
     if (isFogTool && isGM) {
       fogFlushTimer.current = setInterval(flushFogOps, 250);
@@ -312,7 +274,6 @@ export default function Tabletop({
         clearInterval(fogFlushTimer.current);
         fogFlushTimer.current = null;
       }
-      // Flush any remaining ops when tool is deactivated
       flushFogOps();
       setFogBrushPos(null);
       isFogBrushing.current = false;
@@ -322,7 +283,6 @@ export default function Tabletop({
     };
   }, [isFogTool, isGM, flushFogOps]);
 
-  // ── Coordinate helpers ────────────────────────────────────────────────────────
   const screenToWorld = useCallback(
     (pt: Point): Point => ({
       x: (pt.x - cameraX) / zoom,
@@ -337,21 +297,17 @@ export default function Tabletop({
     [gridSize, gridType, snapMode],
   );
 
-  // ── Panning ───────────────────────────────────────────────────────────────────
   const isPanning = useRef(false);
   const lastPointer = useRef({ x: 0, y: 0 });
 
   const getCursor = useCallback(() => {
     if (activeTool === "pan") return "grab";
     if (isMeasureTool(activeTool)) return "crosshair";
-    if (activeTool === "wall") return "crosshair";
-    if (activeTool === "door") return "crosshair";
-    if (activeTool === "fog_reveal") return "none";
-    if (activeTool === "fog_hide") return "none";
+    if (activeTool === "wall" || activeTool === "door") return "crosshair";
+    if (activeTool === "fog_reveal" || activeTool === "fog_hide") return "none";
     return "default";
   }, [activeTool]);
 
-  // ── Master mouse down ─────────────────────────────────────────────────────────
   const handleMouseDown = useCallback(
     (e: any) => {
       const button = e.evt.button as number;
@@ -377,7 +333,6 @@ export default function Tabletop({
         return;
       }
 
-      // ── Wall / door ───────────────────────────────────────────────────────────
       if (isGM && isWallTool && button === 0) {
         if (e.evt.shiftKey) {
           const world = screenToWorld(pos);
@@ -390,7 +345,6 @@ export default function Tabletop({
           if (hit) onRemoveWall?.(hit.id);
           return;
         }
-
         const world = screenToWorld(pos);
         const snapped = snapWorld(world.x, world.y, gridSize, snapEnabled);
         const prev = wallDrawStartRef.current;
@@ -410,7 +364,6 @@ export default function Tabletop({
         return;
       }
 
-      // ── Fog brush ─────────────────────────────────────────────────────────────
       if (isGM && isFogTool && button === 0) {
         isFogBrushing.current = true;
         const world = screenToWorld(pos);
@@ -421,7 +374,6 @@ export default function Tabletop({
         return;
       }
 
-      // ── Measurement ───────────────────────────────────────────────────────────
       if (isMeasureTool(activeTool) && button === 0) {
         const world = screenToWorld(pos);
         const snapped = snapMeasure(world.x, world.y);
@@ -440,7 +392,6 @@ export default function Tabletop({
         return;
       }
 
-      // ── Pan ───────────────────────────────────────────────────────────────────
       if (activeTool === "pan" && e.target === stage && button === 0) {
         isPanning.current = true;
         lastPointer.current = { x: pos.x, y: pos.y };
@@ -466,7 +417,6 @@ export default function Tabletop({
     ],
   );
 
-  // ── Master mouse move ─────────────────────────────────────────────────────────
   const handleMouseMove = useCallback(
     (e: any) => {
       const pos = e.target.getStage().getPointerPosition();
@@ -474,33 +424,26 @@ export default function Tabletop({
 
       if (isGM && isWallTool && wallDrawStartRef.current) {
         const world = screenToWorld(pos);
-        const snapped = snapWorld(world.x, world.y, gridSize, snapEnabled);
-        setWallMousePos(snapped);
+        setWallMousePos(snapWorld(world.x, world.y, gridSize, snapEnabled));
         return;
       }
 
-      // Fog brush — update cursor preview; queue op if dragging
       if (isGM && isFogTool) {
         const world = screenToWorld(pos);
         setFogBrushPos(world);
-
         if (isFogBrushing.current) {
           const last = lastFogPos.current;
           const radius = fogBrushRadiusRef.current;
-          // Only queue a new op when the cursor has moved at least half a radius
-          // — this dramatically reduces the number of circles stored per stroke.
-          const minDist = radius * 0.6;
           if (
             !last ||
-            Math.hypot(world.x - last.x, world.y - last.y) > minDist
+            Math.hypot(world.x - last.x, world.y - last.y) > radius * 0.6
           ) {
             lastFogPos.current = world;
-            const reveal = activeTool === "fog_reveal";
             pendingFogOps.current.push({
               x: world.x,
               y: world.y,
               radius,
-              reveal,
+              reveal: activeTool === "fog_reveal",
             });
           }
         }
@@ -541,14 +484,13 @@ export default function Tabletop({
       onMeasureChange,
     ],
   );
+  console.log("Video?: ", mapIsVideo, "Animated?: ", mapIsAnimated);
 
-  // ── Master mouse up ───────────────────────────────────────────────────────────
   const handleMouseUp = useCallback(
     (e: any) => {
       if (isFogBrushing.current) {
         isFogBrushing.current = false;
         lastFogPos.current = null;
-        // Flush immediately on mouse-up so the final stroke lands right away
         flushFogOps();
       }
       if (isMeasuring.current) {
@@ -582,7 +524,6 @@ export default function Tabletop({
     }
   }, [activeTool, onMeasureClear]);
 
-  // ── Zoom ──────────────────────────────────────────────────────────────────────
   const handleWheel = useCallback(
     (e: any) => {
       e.evt.preventDefault();
@@ -613,6 +554,17 @@ export default function Tabletop({
     >
       {size.width > 0 && (
         <>
+          {mapIsVideo === false && (
+            <VideoMapOverlay
+              src={map}
+              width={mapWidth}
+              height={mapHeight}
+              zoom={zoom}
+              cameraX={cameraX}
+              cameraY={cameraY}
+            />
+          )}
+
           <Stage
             width={size.width}
             height={size.height}
@@ -626,16 +578,29 @@ export default function Tabletop({
               const stage = e.target.getStage();
               const pos = stage?.getPointerPosition();
               if (!pos) return;
-              const wx = (pos.x - cameraX) / zoom;
-              const wy = (pos.y - cameraY) / zoom;
-              onPing(wx, wy);
+              onPing((pos.x - cameraX) / zoom, (pos.y - cameraY) / zoom);
             }}
-            style={{ background: bgColor }}
+            // When a video map is active, make the Stage background transparent
+            // so the HTML <video> element behind it shows through.
+            style={{
+              background: mapIsVideo ? "transparent" : bgColor,
+              position: "relative",
+              zIndex: 1,
+            }}
           >
             {/* Layer 1: map + grid + tokens */}
             <Layer>
               <Group x={cameraX} y={cameraY} scaleX={zoom} scaleY={zoom}>
-                <MapLayer width={mapWidth} height={mapHeight} src={map} />
+                {/* MapLayer renders StaticMapLayer or GifLayer here.
+                    For video maps it returns an empty Group (VideoPlaceholderLayer)
+                    because the actual video is the HTML overlay above.          */}
+                <MapLayer
+                  width={mapWidth}
+                  height={mapHeight}
+                  src={map}
+                  animated={mapIsAnimated}
+                  isVideo={mapIsVideo}
+                />
                 <GridLayer width={mapWidth} height={mapHeight} />
                 <AuraLayer gridSize={gridSize} gridType={gridType} />
                 <TokenLayer
@@ -657,19 +622,21 @@ export default function Tabletop({
             </Layer>
 
             {/* Layer 2: walls */}
-            <WallLayer
-              walls={walls}
-              isGM={isGM}
-              zoom={zoom}
-              cameraX={cameraX}
-              cameraY={cameraY}
-              drawStart={wallDrawStart}
-              mousePos={wallMousePos}
-              activeTool={activeTool}
-              isDrawing={isWallTool}
-              onToggleDoor={onToggleDoor ?? (() => {})}
-              onRemoveWall={onRemoveWall ?? (() => {})}
-            />
+            {visibilityMode === "lighting" && (
+              <WallLayer
+                walls={walls}
+                isGM={isGM}
+                zoom={zoom}
+                cameraX={cameraX}
+                cameraY={cameraY}
+                drawStart={wallDrawStart}
+                mousePos={wallMousePos}
+                activeTool={activeTool}
+                isDrawing={isWallTool}
+                onToggleDoor={onToggleDoor ?? (() => {})}
+                onRemoveWall={onRemoveWall ?? (() => {})}
+              />
+            )}
 
             {/* Layer 3: local measurement */}
             {measure && (
@@ -707,7 +674,6 @@ export default function Tabletop({
             cameraY={cameraY}
           />
 
-          {/* Brush size picker — only visible to GM when fog tool active */}
           {isGM && (
             <BrushSizePicker
               selectedIdx={brushPresetIdx}

@@ -1,6 +1,10 @@
 import { useEffect, useState, useRef } from "react";
 import { supabase } from "../services/supabase";
-import { uploadFile, StorageQuotaError } from "../services/r2Storage";
+import {
+  uploadFile,
+  StorageQuotaError,
+  deleteGameAssets,
+} from "../services/r2Storage";
 import { useNavigate } from "react-router-dom";
 
 interface Game {
@@ -394,8 +398,16 @@ export default function Dashboard() {
 
   const deleteGame = async (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
-    if (!confirm("Permanently delete this campaign?")) return;
+    if (!confirm("Permanently delete this campaign and all its assets?"))
+      return;
+
+    // 1. Delete all R2 objects for this game first
+    //    (non-shared assets only — shared assets stay in the library)
+    await deleteGameAssets(id);
+
+    // 2. Delete the game row — cascades to scenes, tokens, assets, fog, walls etc.
     await supabase.from("games").delete().eq("id", id);
+
     setGames((prev) => prev.filter((g) => g.id !== id));
   };
 
