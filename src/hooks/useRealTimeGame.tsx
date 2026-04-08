@@ -204,7 +204,9 @@ export function useRealtimeGame({
         const scene = payload.new as Scene & { visibility_mode?: string };
 
         if (scene.id === activeSceneRef.current) {
-          if (scene.map_url) setMap(scene.map_url);
+          if (scene.map_url)
+            if (scene.map_url)
+              setMap(scene.map_url, (scene as any).map_mime_type ?? null);
 
           if (!isGMRef.current) {
             onSceneSettingsChangeRef.current?.(scene);

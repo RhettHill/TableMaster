@@ -238,7 +238,10 @@ export default function GameSession() {
       // Track which scene players are on separately from GM view
       updateActiveScene(active.id);
       setPlayerSceneId(active.id);
-      setMap(initialScene.map_url ?? "/testmap.jpg");
+      setMap(
+        initialScene.map_url ?? "/testmap.jpg",
+        (initialScene as any).map_mime_type ?? null,
+      );
       applySceneSettings(initialScene);
 
       await loadSceneTokens(initialScene.id);
@@ -250,7 +253,10 @@ export default function GameSession() {
   const handleScenePreview = useCallback(
     async (scene: Scene) => {
       updateActiveScene(scene.id);
-      setMap(scene.map_url ?? "/testmap.jpg");
+      setMap(
+        scene.map_url ?? "/testmap.jpg",
+        (scene as any).map_mime_type ?? null,
+      );
       applySceneSettings(scene);
       await loadSceneTokens(scene.id);
     },

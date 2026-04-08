@@ -1,6 +1,6 @@
 import { Stage, Layer, Group } from "react-konva";
 import { useEffect, useRef, useState, useCallback } from "react";
-import MapLayer, { VideoMapOverlay } from "./MapLayer";
+import MapLayer, { GifMapOverlay, VideoMapOverlay } from "./MapLayer";
 import GridLayer from "./GridLayer";
 import TokenLayer from "./TokenLayer";
 import MeasureLayer, { MeasureState } from "./MeasureLayer";
@@ -101,17 +101,15 @@ function snapWorld(x: number, y: number, gridSize: number, snap: boolean) {
   };
 }
 
-interface BrushSizePickerProps {
-  selectedIdx: number;
-  onChange: (idx: number) => void;
-  activeTool: ActiveTool;
-}
-
 function BrushSizePicker({
   selectedIdx,
   onChange,
   activeTool,
-}: BrushSizePickerProps) {
+}: {
+  selectedIdx: number;
+  onChange: (idx: number) => void;
+  activeTool: ActiveTool;
+}) {
   const isFog = activeTool === "fog_reveal" || activeTool === "fog_hide";
   if (!isFog) return null;
   return (
@@ -484,7 +482,6 @@ export default function Tabletop({
       onMeasureChange,
     ],
   );
-  console.log("Video?: ", mapIsVideo, "Animated?: ", mapIsAnimated);
 
   const handleMouseUp = useCallback(
     (e: any) => {
@@ -546,6 +543,19 @@ export default function Tabletop({
     [zoom, cameraX, cameraY, setZoomAndCamera],
   );
 
+  // True when an HTML overlay is rendering the map (GIF or video).
+  // The Stage must be transparent in this case so the overlay shows through.
+  const hasOverlay = mapIsAnimated || mapIsVideo;
+
+  const overlayProps = {
+    src: map,
+    width: mapWidth,
+    height: mapHeight,
+    zoom,
+    cameraX,
+    cameraY,
+  };
+
   return (
     <div
       ref={containerRef}
@@ -554,16 +564,13 @@ export default function Tabletop({
     >
       {size.width > 0 && (
         <>
-          {mapIsVideo === false && (
-            <VideoMapOverlay
-              src={map}
-              width={mapWidth}
-              height={mapHeight}
-              zoom={zoom}
-              cameraX={cameraX}
-              cameraY={cameraY}
-            />
-          )}
+          {/* ── Animated map overlays ─────────────────────────────────────────
+              GIF and video maps are rendered as HTML elements BEHIND the Stage.
+              zIndex:0 puts them behind the Konva canvas (zIndex:1).
+              The Stage background is set to transparent when an overlay is active
+              so the overlay shows through.                                      */}
+          {mapIsAnimated && <GifMapOverlay key={map} {...overlayProps} />}
+          {mapIsVideo && <VideoMapOverlay key={map} {...overlayProps} />}
 
           <Stage
             width={size.width}
@@ -580,10 +587,8 @@ export default function Tabletop({
               if (!pos) return;
               onPing((pos.x - cameraX) / zoom, (pos.y - cameraY) / zoom);
             }}
-            // When a video map is active, make the Stage background transparent
-            // so the HTML <video> element behind it shows through.
             style={{
-              background: mapIsVideo ? "transparent" : bgColor,
+              background: hasOverlay ? "transparent" : bgColor,
               position: "relative",
               zIndex: 1,
             }}
@@ -591,9 +596,7 @@ export default function Tabletop({
             {/* Layer 1: map + grid + tokens */}
             <Layer>
               <Group x={cameraX} y={cameraY} scaleX={zoom} scaleY={zoom}>
-                {/* MapLayer renders StaticMapLayer or GifLayer here.
-                    For video maps it returns an empty Group (VideoPlaceholderLayer)
-                    because the actual video is the HTML overlay above.          */}
+                {/* For animated maps this returns an empty Group — overlay handles it */}
                 <MapLayer
                   width={mapWidth}
                   height={mapHeight}

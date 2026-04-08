@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { supabase } from "../../services/supabase";
 import { useAssets } from "../../hooks/useAssets";
 import { useScenes, Scene } from "../../hooks/useScenes";
 import {
@@ -101,8 +102,8 @@ export default function GMPanel({
     sharedLibrary,
     loading: assetsLoading,
     isPro,
+    isProLoading,
     uploadAsset,
-    addFromLibrary,
     markAsShared,
     deleteAsset,
   } = useAssets(userId, gameId);
@@ -123,18 +124,24 @@ export default function GMPanel({
   };
 
   const handleMapPick = async (asset: Asset) => {
-    // mime_type is the reliable source — set on upload via the metadata patch.
-    // is_animated is the fallback for assets uploaded before mime_type was stored.
-    // When is_animated=true but mime_type is unknown we can't distinguish GIF
-    // from video, so we treat it as video (MP4 is far more common as a map).
     const mimeType = asset.mime_type ?? null;
     const isVideoFallback = !mimeType && !!asset.is_animated;
-    const isAnimatedFallback = false; // only used for GIF; without mime_type we can't confirm
+    const isAnimatedFallback = false;
 
+    // Update local store immediately — sets mapIsAnimated / mapIsVideo
     setMap(asset.file_url, mimeType, isAnimatedFallback, isVideoFallback);
 
-    // Persist to DB so the scene restores the correct map on reload.
-    if (activeSceneId) await updateSceneMap(activeSceneId, asset.file_url);
+    if (activeSceneId) {
+      // Save map_url AND map_mime_type together so scene restore can
+      // reconstruct animated flags on reload.
+      // Direct call avoids triggering useScenes.fetchScenes() which would
+      // cause GameSession to call setMap(scene.map_url) without mimeType,
+      // resetting mapIsAnimated/mapIsVideo back to false.
+      await supabase
+        .from("scenes")
+        .update({ map_url: asset.file_url, map_mime_type: mimeType })
+        .eq("id", activeSceneId);
+    }
 
     setPicker(null);
   };
@@ -536,10 +543,11 @@ export default function GMPanel({
           title={picker === "map" ? "Choose a Map" : "Choose a Token"}
           type={picker}
           isPro={isPro}
+          isProLoading={isProLoading}
           onSelect={picker === "map" ? handleMapPick : handleTokenPick}
           onUpload={handleUpload}
           onDelete={deleteAsset}
-          onAddFromLibrary={addFromLibrary}
+          onMarkAsShared={markAsShared}
           onClose={() => setPicker(null)}
         />
       )}
