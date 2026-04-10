@@ -478,6 +478,7 @@ export default function PlansPage() {
                       <>
                         <Feature label="Animated Maps" value="Unlocked" />
                         <Feature label="Asset Sharing" value="Unlocked" />
+                        <Feature label="Custom Systrem" value="Unlocked" />
                       </>
                     )}
                   </div>
@@ -521,7 +522,7 @@ export default function PlansPage() {
             <div
               className={`group relative rounded-2xl border overflow-hidden flex flex-col transition-all duration-200`}
             >
-              <div className="rounded-2xl border border-white/8 bg-white/[0.02] p-8 text-center">
+              <div className="rounded-2xl border border-white/8 bg-white/[0.02] p-8 text-center h-full">
                 <h2 className="text-2xl font-bold text-white mb-2">Donate</h2>
                 <p className="text-stone-400 text-sm mb-6 max-w-md mx-auto">
                   TableMaster is built and maintained by a solo developer. If
@@ -548,8 +549,7 @@ export default function PlansPage() {
 
         {plans.some((p) => p.stripe_price_id) && (
           <p className="text-stone-600 text-xs text-center mt-8 flex items-center justify-center gap-1.5">
-            <span>🔒</span> Payments securely processed by Stripe. Cancel
-            anytime.
+            Payments securely processed by Stripe. Cancel anytime.
           </p>
         )}
       </div>

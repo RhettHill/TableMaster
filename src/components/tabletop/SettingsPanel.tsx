@@ -1,27 +1,3 @@
-// ── Paste this replacement for the "Fog of War" <Section> block inside
-// SettingsPanel.tsx.  Also add `consolidate` and `revealedRegionCount` to
-// the component's props interface and pass them in from GameSession.tsx.
-//
-// Props to add to SettingsPanelProps:
-//   consolidateFog?: () => void;
-//   revealedRegionCount?: number;
-//
-// Usage in the JSX:
-//   <FogSection
-//     visibilityMode={visibilityMode}
-//     onSetVisibilityMode={onSetVisibilityMode}
-//     hasLightingAccess={hasLightingAccess}
-//     planCheckDone={planCheckDone}
-//     onUpgradeClick={handleUpgradeClick}
-//     onClearFog={onClearFog}
-//     consolidateFog={consolidateFog}
-//     revealedRegionCount={revealedRegionCount}
-//   />
-//
-// ─────────────────────────────────────────────────────────────────────────────
-// The complete updated SettingsPanel.tsx follows below.
-// ─────────────────────────────────────────────────────────────────────────────
-
 import { useRef, useState, useEffect } from "react";
 import {
   useGameStore,
@@ -31,6 +7,7 @@ import {
 import { useMeasurementStore } from "../../store/MeasurementStore";
 import { supabase } from "../../services/supabase";
 import type { VisibilityMode } from "../../hooks/useFog";
+import { useNavigate } from "react-router-dom";
 
 interface SettingsPanelProps {
   gameId: string;
@@ -402,6 +379,7 @@ function UpgradeBanner({ onUpgrade }: { onUpgrade: () => void }) {
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 export default function SettingsPanel({
+  gameId,
   activeSceneId,
   onSceneSettingChange,
   onGameSettingChange,
@@ -420,8 +398,10 @@ export default function SettingsPanel({
   const setFeetPerSquare = useMeasurementStore((s) => s.setFeetPerSquare);
 
   const [hasLightingAccess, setHasLightingAccess] = useState(false);
+  const [isPro, setIsPro] = useState(false);
   const [planCheckDone, setPlanCheckDone] = useState(false);
   const [consolidating, setConsolidating] = useState(false);
+  const navigate = useNavigate();
 
   useEffect(() => {
     const check = async () => {
@@ -449,6 +429,7 @@ export default function SettingsPanel({
       setHasLightingAccess(
         hasSub && (profile.plan_id === "plus" || profile.plan_id === "pro"),
       );
+      setIsPro(profile.plan_id === "pro");
       setPlanCheckDone(true);
     };
     check();
@@ -721,6 +702,19 @@ export default function SettingsPanel({
             className="bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white placeholder-white/25 focus:outline-none focus:border-amber-500/50 transition-colors"
           />
         </Field>
+        <button
+          onClick={() => {
+            if (isPro) navigate(`/game/${gameId}/system-builder`);
+            else navigate("/plans");
+          }}
+          className="flex items-center gap-2 px-3 py-2 rounded-xl border border-amber-500/20 bg-amber-500/5
+    text-amber-400/80 hover:text-amber-300 hover:bg-amber-500/10 text-xs font-semibold transition-all w-full"
+        >
+          <span>⚙</span> Custom System Builder
+          <span className="ml-auto text-[9px] px-1.5 py-0.5 rounded bg-amber-500/20 border border-amber-500/30 text-amber-400">
+            Pro
+          </span>
+        </button>
         <p className="text-[10px] text-white/20 text-center">
           Changes save automatically
         </p>

@@ -295,20 +295,23 @@ export default function Toolbar({
                 />
               </>
             )}
-            <Divider />
-            <ToolButton
-              icon="👁"
-              label="Reveal Fog — paint to reveal areas for players"
-              active={activeTool === "fog_reveal"}
-              onClick={() => onToolChange("fog_reveal")}
-            />
-            <ToolButton
-              icon="🌑"
-              label="Hide Fog — restore fog to revealed areas"
-              active={activeTool === "fog_hide"}
-              onClick={() => onToolChange("fog_hide")}
-            />
-            <Divider />
+            {(visibilityMode === "fog" || visibilityMode === "lighting") && (
+              <>
+                <ToolButton
+                  icon="👁"
+                  label="Reveal Fog — paint to reveal areas for players"
+                  active={activeTool === "fog_reveal"}
+                  onClick={() => onToolChange("fog_reveal")}
+                />
+                <ToolButton
+                  icon="🌑"
+                  label="Hide Fog — restore fog to revealed areas"
+                  active={activeTool === "fog_hide"}
+                  onClick={() => onToolChange("fog_hide")}
+                />
+              </>
+            )}
+
             <ToolButton
               icon="⚙"
               label="GM Tools"

@@ -316,11 +316,6 @@ export default function AssetPicker({
                         {isVideoAsset ? "VID" : "GIF"}
                       </span>
                     )}
-                    <div className="absolute inset-0 bg-black/0 group-hover:bg-sky-500/10 transition-colors flex items-center justify-center">
-                      <span className="opacity-0 group-hover:opacity-100 text-sky-300 text-xs font-semibold bg-black/60 px-2 py-1 rounded transition-all">
-                        Use this {type}
-                      </span>
-                    </div>
                   </div>
                 );
               })}

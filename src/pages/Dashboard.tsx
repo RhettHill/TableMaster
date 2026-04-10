@@ -278,7 +278,11 @@ export default function Dashboard() {
         { data: ownedGames },
         { data: memberRows },
       ] = await Promise.all([
-        supabase.from("systems").select("id, name, slug").order("name"),
+        supabase
+          .from("systems")
+          .select("id, name, slug")
+          .eq("custom", false)
+          .order("name"),
         supabase
           .from("profiles")
           .select(
@@ -296,6 +300,7 @@ export default function Dashboard() {
           .select("game_id, games(id, name, created_at, icon_url)")
           .eq("user_id", user.id),
       ]);
+      console.log(user.id);
 
       setSystems(systemRows ?? []);
       if (systemRows && systemRows.length > 0)
@@ -594,25 +599,28 @@ export default function Dashboard() {
                       {creating ? "…" : "+ New"}
                     </button>
                   </div>
-
                   {systems.length > 0 && (
                     <div className="flex items-center gap-2">
                       <span className="text-stone-500 text-xs">System:</span>
-                      <div className="flex gap-1 flex-wrap">
+
+                      <select
+                        value={selectedSystemId}
+                        onChange={(e) => setSelectedSystemId(e.target.value)}
+                        className="bg-white/5 border border-white/10 focus:border-amber-500/50 
+                 rounded-lg px-3 py-1.5 text-xs text-white 
+                 focus:outline-none focus:ring-2 focus:ring-amber-500/15 
+                 transition-all"
+                      >
                         {systems.map((s) => (
-                          <button
+                          <option
                             key={s.id}
-                            onClick={() => setSelectedSystemId(s.id)}
-                            className={`px-3 py-1 rounded-lg text-xs font-semibold border transition-all ${
-                              selectedSystemId === s.id
-                                ? "bg-amber-500/20 border-amber-500/50 text-amber-400"
-                                : "bg-white/5 border-white/10 text-stone-500 hover:text-white/70"
-                            }`}
+                            value={s.id}
+                            className="bg-[#0a0a0f]"
                           >
                             {s.name}
-                          </button>
+                          </option>
                         ))}
-                      </div>
+                      </select>
                     </div>
                   )}
                 </>

@@ -109,7 +109,7 @@ export default function CharacterSheet({
       // Step 2: load the system separately — sheet_template may not exist yet
       const { data: systemData } = await supabase
         .from("systems")
-        .select("id, slug, name")
+        .select("id, slug, name, sheet_template") // ← THIS IS MISSING
         .eq("id", sheetRow.system_id)
         .single();
 

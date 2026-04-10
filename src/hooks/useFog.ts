@@ -12,9 +12,6 @@ export interface FogRegion {
   points?: any;
 }
 
-// "none"     — fog disabled, all players see everything
-// "fog"      — GM manually paints revealed areas
-// "lighting" — token vision + wall raycasting
 export type VisibilityMode = "none" | "fog" | "lighting";
 
 interface FogBroadcastAdd    { type: "fog_add";    region: FogRegion }
@@ -25,13 +22,6 @@ export type FogBroadcastEvent = FogBroadcastAdd | FogBroadcastRemove | FogBroadc
 
 type SendFn = (event: FogBroadcastEvent) => void;
 
-// ── Geometry helpers ──────────────────────────────────────────────────────────
-
-/**
- * Returns true if circle A is fully contained within circle B.
- * We use this to cull redundant regions: if a big circle already covers
- * a smaller one, the smaller one adds nothing to the visible area.
- */
 function circleContains(
   bx: number, by: number, br: number,
   ax: number, ay: number, ar: number,
@@ -39,14 +29,6 @@ function circleContains(
   return Math.hypot(bx - ax, by - ay) + ar <= br;
 }
 
-/**
- * Greedy O(n²) pass: remove any region that is fully contained by another.
- * On a typical map after heavy fog-painting this can trim hundreds of rows
- * down to a few dozen, which keeps the canvas re-draw fast.
- *
- * We run this client-side so the GM's screen stays responsive; the pruned
- * IDs are also deleted from the DB and broadcast so all clients stay in sync.
- */
 function cullContainedRegions(regions: FogRegion[]): {
   kept: FogRegion[];
   removedIds: string[];
@@ -56,7 +38,6 @@ function cullContainedRegions(regions: FogRegion[]): {
 
   for (let i = 0; i < regions.length; i++) {
     const a = regions[i];
-    // Is region[i] fully covered by any other region?
     const covered = regions.some(
       (b, j) =>
         j !== i &&
@@ -73,8 +54,6 @@ function cullContainedRegions(regions: FogRegion[]): {
   return { kept, removedIds };
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-
 export function useFog(
   sceneId: string | null,
   gameId: string | null,
@@ -89,7 +68,6 @@ export function useFog(
   const sendRef = useRef<SendFn | null>(null);
   useEffect(() => { sendRef.current = sendFn; }, [sendFn]);
 
-  // ── Initial load ─────────────────────────────────────────────────────────────
   const load = useCallback(async () => {
     if (!sceneId) {
       setVisibilityModeState("none");
@@ -115,39 +93,30 @@ export function useFog(
 
   useEffect(() => { load(); }, [load]);
 
-  // ── Consolidate — prune redundant circles from DB ─────────────────────────────
-  // Called automatically after each stroke ends (via a debounce in the parent).
-  // Safe to call frequently — it's a no-op if there's nothing to cull.
   const consolidate = useCallback(async () => {
     const current = revealedRegionsRef.current;
-    if (current.length < 10) return; // not worth the work below this threshold
+    if (current.length < 10) return;
 
     const { kept, removedIds } = cullContainedRegions(current);
     if (removedIds.length === 0) return;
 
-    // Update local state immediately
     setRevealedRegions(kept);
-
-    // Delete from DB
     await supabase.from("fog_revealed").delete().in("id", removedIds);
-
-    // Broadcast removal so other clients trim their lists too
     sendRef.current?.({ type: "fog_remove", ids: removedIds });
   }, []);
 
-  // Debounced consolidation — runs 1.5 s after the last region was added
   const consolidateTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const scheduleConsolidate = useCallback(() => {
     if (consolidateTimer.current) clearTimeout(consolidateTimer.current);
     consolidateTimer.current = setTimeout(consolidate, 1500);
   }, [consolidate]);
 
-  // ── Broadcast handler ─────────────────────────────────────────────────────────
   const handleFogBroadcast = useCallback((event: FogBroadcastEvent) => {
     switch (event.type) {
       case "fog_add":
         setRevealedRegions((prev) => {
           const r = event.region;
+          // Remove any temp placeholder that matches this real region's position
           const withoutTemp = prev.filter(
             (p) => !(p.id.startsWith("temp-") && p.cx === r.cx && p.cy === r.cy && p.radius === r.radius),
           );
@@ -172,8 +141,6 @@ export function useFog(
       setVisibilityModeState(updated.visibility_mode as VisibilityMode);
     }
   }, []);
-
-  // ── Actions ───────────────────────────────────────────────────────────────────
 
   const setVisibilityMode = useCallback(
     async (mode: VisibilityMode) => {
@@ -207,10 +174,10 @@ export function useFog(
       }
 
       const region = data as FogRegion;
+      // Swap temp → real before broadcasting so players always get the canonical real ID
       setRevealedRegions((prev) => prev.map((r) => (r.id === tempId ? region : r)));
       sendRef.current?.({ type: "fog_add", region });
 
-      // Schedule a consolidation pass after this stroke settles
       scheduleConsolidate();
     },
     [sceneId, gameId, scheduleConsolidate],
@@ -229,12 +196,15 @@ export function useFog(
 
       if (toRemove.length === 0) return;
 
-      const toRemoveIds = toRemove.map((r) => r.id).filter((id) => !id.startsWith("temp-"));
+      // Remove locally (both temp and real)
       setRevealedRegions((prev) => prev.filter((r) => !toRemove.some((t) => t.id === r.id)));
 
-      if (toRemoveIds.length > 0) {
-        await supabase.from("fog_revealed").delete().in("id", toRemoveIds);
-        sendRef.current?.({ type: "fog_remove", ids: toRemoveIds });
+      // Only delete/broadcast real IDs — temp IDs were never persisted or broadcast to players
+      const realIds = toRemove.map((r) => r.id).filter((id) => !id.startsWith("temp-"));
+
+      if (realIds.length > 0) {
+        await supabase.from("fog_revealed").delete().in("id", realIds);
+        sendRef.current?.({ type: "fog_remove", ids: realIds });
       }
     },
     [sceneId],
@@ -257,7 +227,7 @@ export function useFog(
     addRevealedRegion,
     removeRevealedRegion,
     clearFog,
-    consolidate,         // exposed so SettingsPanel can offer a manual "Optimize" button
+    consolidate,
     handleFogBroadcast,
     handleSceneUpdate,
     reload: load,

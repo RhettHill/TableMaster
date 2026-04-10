@@ -36,22 +36,15 @@ import { useNpcStatBlocks } from "../hooks/useStatBlock";
 import { useMeasurementStore } from "../store/MeasurementStore";
 
 export default function GameSession() {
-  // ── Auth ──────────────────────────────────────────────────────────────────────
-  const [user, setUser] = useState<User | null>(null);
-
-  useEffect(() => {
-    supabase.auth
-      .getSession()
-      .then(({ data }) => setUser(data.session?.user ?? null));
-    const { data: listener } = supabase.auth.onAuthStateChange(
-      (_event, session) => setUser(session?.user ?? null),
-    );
-    return () => listener.subscription.unsubscribe();
-  }, []);
-
   const { gameId } = useParams<{ gameId: string }>();
 
-  // ── Game info + GM check ──────────────────────────────────────────────────────
+  // ── Auth + GM check (merged to eliminate race condition) ──────────────────────
+  // Previously these were two separate effects: one set `user` state, the other
+  // depended on `user` state. On first load `user` is null so the GM check
+  // bailed immediately, and by the time auth resolved the effect had already run.
+  // Fix: await getSession() directly inside one effect so currentUser is available
+  // before the game query fires, with no state dependency between them.
+  const [user, setUser] = useState<User | null>(null);
   const [isGM, setIsGM] = useState(false);
   const [gameSystemId, setGameSystemId] = useState<string | undefined>(
     undefined,
@@ -60,27 +53,57 @@ export default function GameSession() {
   const setGameSettings = useGameStore((s) => s.setGameSettings);
 
   useEffect(() => {
-    if (!gameId || !user) return;
-    supabase
-      .from("games")
-      .select(
-        "owner_id, name, default_grid_size, bg_color, system_id, systems(slug)",
-      )
-      .eq("id", gameId)
-      .single()
-      .then(({ data, error }) => {
-        if (error || !data) return;
-        setIsGM(data.owner_id === user.id);
-        setGameSystemId(data.system_id ?? undefined);
-        setGameSystemSlug((data.systems as any)?.slug ?? "dnd5e");
-        setGameSettings({
-          gameName: data.name ?? "",
-          defaultGridSize:
-            data.default_grid_size ?? DEFAULT_GAME_SETTINGS.defaultGridSize,
-          bgColor: data.bg_color ?? DEFAULT_GAME_SETTINGS.bgColor,
-        });
+    const init = async () => {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      const currentUser = session?.user ?? null;
+      setUser(currentUser);
+      if (!currentUser || !gameId) return;
+
+      const { data, error } = await supabase
+        .from("games")
+        .select(
+          `
+    owner_id,
+    name,
+    default_grid_size,
+    bg_color,
+    system_id,
+    systems:systems!games_system_id_fkey(slug)
+  `,
+        )
+        .eq("id", gameId)
+        .single();
+
+      if (error || !data) {
+        console.log(error);
+        return;
+      }
+
+      setIsGM(data.owner_id === currentUser.id);
+      setGameSettings({
+        gameName: data.name ?? "",
+        defaultGridSize:
+          data.default_grid_size ?? DEFAULT_GAME_SETTINGS.defaultGridSize,
+        bgColor: data.bg_color ?? DEFAULT_GAME_SETTINGS.bgColor,
       });
-  }, [gameId, user]);
+      setGameSystemId(data.system_id);
+      setGameSystemSlug(data.systems?.[0]?.slug ?? "dnd5e");
+      console.log(data.system_id);
+    };
+
+    init();
+
+    // Keep listener for token refresh / sign-out mid-session
+    const { data: listener } = supabase.auth.onAuthStateChange(
+      (_event, session) => {
+        setUser(session?.user ?? null);
+      },
+    );
+
+    return () => listener.subscription.unsubscribe();
+  }, [gameId]); // gameId only — not user
 
   // ── Store ─────────────────────────────────────────────────────────────────────
   const setMap = useGameStore((s) => s.setMap);
@@ -115,7 +138,7 @@ export default function GameSession() {
     confirmPlayerPick,
     cancelPlayerPick,
     closeSheet,
-  } = useCharacterSheet(user?.id ?? "", isGM, gameSystemSlug);
+  } = useCharacterSheet(user?.id ?? "", isGM, gameSystemSlug, gameSystemId);
 
   // ── NPC stat blocks ───────────────────────────────────────────────────────────
   const { assignToToken } = useNpcStatBlocks(gameId ?? null);
@@ -124,8 +147,6 @@ export default function GameSession() {
   const [assigningTokenName, setAssigningTokenName] = useState<string>("");
 
   // ── Active scenes ─────────────────────────────────────────────────────────────
-  // activeSceneId = what the GM is currently viewing (local only for GM)
-  // playerSceneId = what players are on (the DB-active scene)
   const [activeSceneId, setActiveSceneId] = useState<string | null>(null);
   const [playerSceneId, setPlayerSceneId] = useState<string | null>(null);
 
@@ -235,7 +256,6 @@ export default function GameSession() {
       const active = sceneRows.find((s: Scene) => s.active);
       const initialScene = active ?? sceneRows[0];
 
-      // Track which scene players are on separately from GM view
       updateActiveScene(active.id);
       setPlayerSceneId(active.id);
       setMap(
@@ -249,7 +269,7 @@ export default function GameSession() {
     restore();
   }, [gameId]);
 
-  // ── GM: preview scene locally (no DB write, doesn't move players) ─────────────
+  // ── GM: preview scene locally ─────────────────────────────────────────────────
   const handleScenePreview = useCallback(
     async (scene: Scene) => {
       updateActiveScene(scene.id);
@@ -263,7 +283,7 @@ export default function GameSession() {
     [setMap, applySceneSettings, updateActiveScene, loadSceneTokens],
   );
 
-  // ── GM: push players to a scene (sets DB active → realtime pushes players) ────
+  // ── GM: push players to a scene ───────────────────────────────────────────────
   const handleScenePushToPlayers = useCallback(
     async (scene: Scene) => {
       await dbSetActiveScene(scene.id);
@@ -276,7 +296,10 @@ export default function GameSession() {
   const handlePlayerSceneSwitch = useCallback(
     async (scene: Scene) => {
       updateActiveScene(scene.id);
-      setMap(scene.map_url ?? "/testmap.jpg");
+      setMap(
+        scene.map_url ?? "/testmap.jpg",
+        (scene as any).map_mime_type ?? null,
+      );
       applySceneSettings(scene);
       setPlayerSceneId(scene.id);
       await loadSceneTokens(scene.id);
@@ -330,7 +353,7 @@ export default function GameSession() {
     sendFogRef.current = sendFog;
   }, [sendFog]);
 
-  // ── Walls ──────────────────────────────────────────────────────────────────────
+  // ── Walls ─────────────────────────────────────────────────────────────────────
   const sendWallRef = useRef<
     ((e: import("../hooks/useWalls").WallBroadcastEvent) => void) | null
   >(null);
@@ -402,12 +425,8 @@ export default function GameSession() {
 
   const handleMoveToken = useCallback(
     async (id: string, x: number, y: number) => {
-      // Optimistic local update
       storeMoveToken(id, x, y);
-      // Broadcast to ALL clients (GM and other players) via realtime channel
-      // This ensures the GM sees player token moves immediately without DB round-trip
       sendTokenMove(id, x, y);
-      // Persist to DB
       await dbMoveToken(id, x, y);
     },
     [storeMoveToken, dbMoveToken, sendTokenMove],
@@ -585,7 +604,8 @@ export default function GameSession() {
   const sheetCheckDone = useRef(false);
   useEffect(() => {
     if (!gameId || !user || isGM) return;
-    if (gameSystemId === undefined) return;
+    if (!gameSystemId || !gameSystemSlug) return;
+
     if (sheetCheckDone.current) return;
     sheetCheckDone.current = true;
     supabase

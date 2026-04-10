@@ -10,10 +10,33 @@ export interface OpenSheet {
   canEdit: boolean;
 }
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+// Resolve a system_id → { id, slug } — used when we have an ID but need the slug
+// for rendering, and vice versa.
+async function resolveSystem(
+  systemId?: string | null,
+  systemSlug?: string | null,
+): Promise<{ id: string; slug: string } | null> {
+  if (!systemId && !systemSlug) return null;
+
+  const query = supabase.from("systems").select("id, slug");
+  const { data } = systemId
+    ? await query.eq("id", systemId).single()
+    : await query.eq("slug", systemSlug!).single();
+
+  return data ?? null;
+}
+
 export function useCharacterSheet(
   currentUserId: string,
   isGM: boolean,
+  // Now accepts both slug and id so custom systems work correctly.
+  // GameSession passes the real slug (e.g. "custom_<gameId>_blades") from the
+  // joined systems row; for built-in games that have no system set yet this
+  // falls back to "dnd5e".
   gameSystemSlug: string = "dnd5e",
+  gameSystemId?: string,
 ) {
   const [openSheet, setOpenSheet] = useState<OpenSheet | null>(null);
   const [needsSystemPick, setNeedsSystemPick] = useState(false);
@@ -21,20 +44,34 @@ export function useCharacterSheet(
   const [pendingGameId, setPendingGameId] = useState<string | null>(null);
   const [pendingTokenId, setPendingTokenId] = useState<string | null>(null);
 
-  // ── Internal: create sheet via RPC then open ──────────────────────────────
+  // ── Internal: create/get sheet then open ─────────────────────────────────
+  // Uses system_id when available (custom systems) so the RPC inserts the
+  // correct system_id into character_sheets instead of looking up by slug.
   const createAndOpen = useCallback(
     async (
       gameId: string,
       userId: string,
       systemSlug: string,
       tokenId: string | null,
+      systemIdOverride?: string,
     ) => {
-      const { data: sheetId } = await supabase.rpc("get_or_create_sheet", {
-        p_game_id: gameId,
-        p_user_id: userId,
-        p_system_slug: systemSlug,
-      });
-      if (!sheetId) return;
+      // Prefer the passed system_id; fall back to slug-based lookup in the RPC
+      const { data: sheetId, error } = await supabase.rpc(
+        "get_or_create_sheet",
+        {
+          p_game_id: gameId,
+          p_user_id: userId,
+          p_system_slug: systemSlug,
+          // p_system_id is an optional param — add it to the RPC if your DB
+          // version supports it; otherwise the slug lookup handles it.
+          ...(systemIdOverride ? { p_system_id: systemIdOverride } : {}),
+        },
+      );
+
+      if (error || !sheetId) {
+        console.error("get_or_create_sheet failed", error);
+        return;
+      }
 
       if (tokenId) {
         await supabase
@@ -55,13 +92,11 @@ export function useCharacterSheet(
     [currentUserId, isGM],
   );
 
-  // ── Resolve ALL of the player's tokens in the current game ─────────────────
-  // Returns every token across all scenes that belongs to this player.
+  // ── Resolve all tokens for a player in a game ─────────────────────────────
   const resolveTokens = useCallback(
     async (gameId: string, sheetId?: string): Promise<string[]> => {
       const ids = new Set<string>();
 
-      // All scenes in this game
       const { data: scenes } = await supabase
         .from("scenes")
         .select("id")
@@ -69,7 +104,6 @@ export function useCharacterSheet(
       if (!scenes?.length) return [];
       const sceneIds = scenes.map((s: any) => s.id);
 
-      // Tokens linked to this sheet
       if (sheetId) {
         const { data: bySheet } = await supabase
           .from("tokens")
@@ -79,7 +113,6 @@ export function useCharacterSheet(
         (bySheet ?? []).forEach((t: any) => ids.add(t.id));
       }
 
-      // Tokens owned by this user in this game
       const { data: byOwner } = await supabase
         .from("tokens")
         .select("id")
@@ -92,25 +125,51 @@ export function useCharacterSheet(
     [currentUserId],
   );
 
-  // ── Open player's own sheet (toolbar button or on-load check) ─────────────
-  // linkTokenId: optionally link the found/created sheet to a token
+  // ── Determine which system to use for this game ───────────────────────────
+  // Priority: custom system for this game > game's system_id > slug fallback
+  const resolveGameSystem = useCallback(
+    async (gameId: string): Promise<{ slug: string; id?: string } | null> => {
+      // First check if there's a custom system for this specific game
+      const { data: customSys } = await supabase
+        .from("systems")
+        .select("id, slug")
+        .eq("game_id", gameId)
+        .eq("custom", true)
+        .maybeSingle();
+
+      if (customSys) return { slug: customSys.slug, id: customSys.id };
+
+      // Fall back to the game's assigned system
+      if (gameSystemId) {
+        const sys = await resolveSystem(gameSystemId);
+        if (sys) return { slug: sys.slug, id: sys.id };
+      }
+
+      if (gameSystemSlug && gameSystemSlug !== "dnd5e") {
+        return { slug: gameSystemSlug };
+      }
+
+      return { slug: "dnd5e" };
+    },
+    [gameSystemId, gameSystemSlug],
+  );
+
+  // ── Open player's own sheet ───────────────────────────────────────────────
   const openOwn = useCallback(
     async (gameId: string, linkTokenId?: string | null) => {
-      // Check if player already has a sheet for this game
+      // Check existing sheet
       const { data: existing } = await supabase
         .from("character_sheets")
-        .select("id, systems(slug)")
+        .select("id, system_id, systems(slug, sheet_template)")
         .eq("game_id", gameId)
         .eq("user_id", currentUserId)
         .maybeSingle();
 
       if (existing) {
-        // Resolve all tokens for this player in this game, link them to the sheet
         const allTokenIds = linkTokenId
           ? [linkTokenId]
           : await resolveTokens(gameId, existing.id);
 
-        // Ensure all tokens have sheet_id set
         if (allTokenIds.length > 0) {
           await supabase
             .from("tokens")
@@ -118,51 +177,71 @@ export function useCharacterSheet(
             .in("id", allTokenIds);
         }
 
+        // Check if the game now has a custom system — if so, the sheet's
+        // system may be stale (was created before the custom system existed).
+        // Re-check and update if needed.
+        const { data: customSys } = await supabase
+          .from("systems")
+          .select("id, slug")
+          .eq("game_id", gameId)
+          .eq("custom", true)
+          .maybeSingle();
+
+        if (customSys && existing.system_id !== customSys.id) {
+          // Update the sheet to use the new custom system
+          await supabase
+            .from("character_sheets")
+            .update({ system_id: customSys.id })
+            .eq("id", existing.id);
+
+          setOpenSheet({
+            sheetId: existing.id,
+            gameId,
+            userId: currentUserId,
+            systemSlug: customSys.slug,
+            tokenId: allTokenIds[0] ?? null,
+            canEdit: true,
+          });
+          return;
+        }
+
         setOpenSheet({
           sheetId: existing.id,
           gameId,
           userId: currentUserId,
           systemSlug: (existing.systems as any)?.slug ?? "dnd5e",
-          tokenId: allTokenIds[0] ?? null, // primary token for seed-from-token logic
+          tokenId: allTokenIds[0] ?? null,
           canEdit: true,
         });
         return;
       }
 
-      // No sheet yet — resolve token first
+      // No sheet yet — determine which system to use
       const allTokenIds = linkTokenId
         ? [linkTokenId]
         : await resolveTokens(gameId);
       const tokenId = allTokenIds[0] ?? null;
 
-      // If the game has a system set, always use it — never prompt the player
-      if (gameSystemSlug && gameSystemSlug !== "dnd5e") {
-        await createAndOpen(gameId, currentUserId, gameSystemSlug, tokenId);
+      const sys = await resolveGameSystem(gameId);
+
+      if (sys) {
+        await createAndOpen(gameId, currentUserId, sys.slug, tokenId, sys.id);
         return;
       }
 
-      // Single system available — auto-create without prompting
-      const { data: systems } = await supabase
-        .from("systems")
-        .select("id, slug");
-      if (systems && systems.length === 1) {
-        await createAndOpen(gameId, currentUserId, systems[0].slug, tokenId);
-        return;
-      }
-
-      // Game uses dnd5e (the default) and multiple systems exist — use dnd5e directly
-      // Only show the picker if the game has no system set at all
-      if (gameSystemSlug) {
-        await createAndOpen(gameId, currentUserId, gameSystemSlug, tokenId);
-        return;
-      }
-
-      // No game system set — show picker as last resort
+      // Last resort — show system picker
       setPendingGameId(gameId);
       setPendingTokenId(tokenId);
       setNeedsSystemPick(true);
     },
-    [currentUserId, gameSystemSlug, createAndOpen, resolveTokens],
+    [
+      currentUserId,
+      gameSystemSlug,
+      gameSystemId,
+      createAndOpen,
+      resolveTokens,
+      resolveGameSystem,
+    ],
   );
 
   // ── Player confirms system in picker ──────────────────────────────────────
@@ -194,28 +273,27 @@ export function useCharacterSheet(
       setNeedsPlayerPick(false);
       if (!pendingGameId) return;
 
-      // Get or create the sheet for this player — but don't open it on the GM's screen
+      const sys = await resolveGameSystem(pendingGameId);
+      const slug = sys?.slug ?? gameSystemSlug ?? "dnd5e";
+
       const { data: sheetId } = await supabase.rpc("get_or_create_sheet", {
         p_game_id: pendingGameId,
         p_user_id: targetUserId,
-        p_system_slug: gameSystemSlug,
+        p_system_slug: slug,
+        ...(sys?.id ? { p_system_id: sys.id } : {}),
       });
 
       if (sheetId && pendingTokenId) {
-        // Link sheet + owner to the token so the player can open it later
         await supabase
           .from("tokens")
-          .update({
-            sheet_id: sheetId,
-            owner_id: targetUserId,
-          })
+          .update({ sheet_id: sheetId, owner_id: targetUserId })
           .eq("id", pendingTokenId);
       }
 
       setPendingGameId(null);
       setPendingTokenId(null);
     },
-    [pendingGameId, pendingTokenId, gameSystemSlug],
+    [pendingGameId, pendingTokenId, gameSystemSlug, resolveGameSystem],
   );
 
   const cancelPlayerPick = useCallback(() => {
@@ -245,7 +323,6 @@ export function useCharacterSheet(
             .single();
 
           if (sheet && sheet.user_id !== currentUserId) {
-            // Valid player sheet already linked — open directly
             setOpenSheet({
               sheetId: sheet.id,
               gameId,
@@ -257,14 +334,12 @@ export function useCharacterSheet(
             return;
           }
 
-          // Sheet is GM's own stale test sheet — clear it
           await supabase
             .from("tokens")
             .update({ sheet_id: null })
             .eq("id", tokenId);
         }
 
-        // No valid player sheet — ask GM to pick which player
         setPendingGameId(gameId);
         setPendingTokenId(tokenId);
         setNeedsPlayerPick(true);
@@ -272,8 +347,6 @@ export function useCharacterSheet(
       }
 
       // ── Player path ───────────────────────────────────────────────────────
-
-      // Token has a sheet linked
       if (token.sheet_id) {
         const { data: sheet } = await supabase
           .from("character_sheets")
@@ -281,50 +354,73 @@ export function useCharacterSheet(
           .eq("id", token.sheet_id)
           .single();
 
-        // Only open if the sheet belongs to this player
         if (sheet && sheet.user_id === currentUserId) {
+          // Check if system has changed since sheet was created
+          const { data: customSys } = await supabase
+            .from("systems")
+            .select("id, slug")
+            .eq("game_id", gameId)
+            .eq("custom", true)
+            .maybeSingle();
+
+          const currentSlug = (sheet.systems as any)?.slug ?? "dnd5e";
+          const targetSlug = customSys?.slug ?? currentSlug;
+
+          // If game now has a custom system but this sheet doesn't use it, migrate
+          if (customSys && currentSlug !== customSys.slug) {
+            await supabase
+              .from("character_sheets")
+              .update({ system_id: customSys.id })
+              .eq("id", sheet.id);
+          }
+
           setOpenSheet({
             sheetId: sheet.id,
             gameId,
             userId: sheet.user_id,
-            systemSlug: (sheet.systems as any)?.slug ?? "dnd5e",
+            systemSlug: targetSlug,
             tokenId,
             canEdit: true,
           });
           return;
         }
 
-        // Sheet belongs to someone else — player can't open it
         if (sheet && sheet.user_id !== currentUserId) return;
       }
 
-      // Token has a known owner — only open if it's this player's token
       if (token.owner_id && token.owner_id !== currentUserId) return;
 
-      // Token is either unowned+player_editable, or owned by this player
-      // Route through openOwn so system picker shows if needed (never auto-creates blank)
       if (token.player_editable) {
         await openOwn(gameId, undefined);
       }
     },
-    [currentUserId, isGM, createAndOpen, openOwn],
+    [currentUserId, isGM, openOwn],
   );
 
   // ── Auto-link sheet when GM grants player control ─────────────────────────
   const autoLinkSheet = useCallback(
     async (tokenId: string, ownerId: string, gameId: string) => {
-      const { data: sheetId } = await supabase.rpc("get_or_create_sheet", {
-        p_game_id: gameId,
-        p_user_id: ownerId,
-        p_system_slug: gameSystemSlug,
-      });
-      if (!sheetId) return;
+      const sys = await resolveGameSystem(gameId);
+      const slug = sys?.slug ?? gameSystemSlug ?? "dnd5e";
+
+      const { data: sheetId, error } = await supabase.rpc(
+        "get_or_create_sheet",
+        {
+          p_game_id: gameId,
+          p_user_id: ownerId,
+          p_system_slug: slug,
+          ...(sys?.id ? { p_system_id: sys.id } : {}),
+        },
+      );
+
+      if (error || !sheetId) return;
+
       await supabase
         .from("tokens")
         .update({ sheet_id: sheetId })
         .eq("id", tokenId);
     },
-    [],
+    [gameSystemSlug, resolveGameSystem],
   );
 
   const closeSheet = useCallback(() => setOpenSheet(null), []);

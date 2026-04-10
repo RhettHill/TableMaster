@@ -17,6 +17,7 @@ interface Scene {
   name: string;
   active: boolean;
   map_url: string | null;
+  map_mime_type: string | null;
   created_at: string;
   grid_type: string;
   grid_size: number;
@@ -37,17 +38,41 @@ function accentColor(name: string) {
 // ── Sub-components ────────────────────────────────────────────────────────────
 
 function SceneCard({ scene }: { scene: Scene }) {
+  const mime = (scene as any).map_mime_type as string | undefined;
+  const isVideo = mime ? mime.startsWith("video/") : false;
+  const isGif = mime === "image/gif";
+  const isAnimated = isVideo || isGif || !!(scene as any).map_is_animated;
+
+  const renderThumbnail = () => {
+    if (!scene.map_url) {
+      return <span className="text-stone-600 text-lg">🗺</span>;
+    }
+    if (isVideo) {
+      return (
+        <video
+          src={scene.map_url}
+          className="w-full h-full object-cover"
+          autoPlay
+          loop
+          muted
+          playsInline
+        />
+      );
+    }
+    // GIF or static image — <img> handles both
+    return (
+      <img src={scene.map_url} alt="" className="w-full h-full object-cover" />
+    );
+  };
+
   return (
     <div className="flex items-center gap-4 p-4 rounded-xl border border-white/8 bg-white/[0.02] hover:bg-white/[0.04] transition-colors">
-      <div className="w-12 h-12 rounded-lg overflow-hidden flex-shrink-0 bg-white/5 border border-white/8 flex items-center justify-center">
-        {scene.map_url ? (
-          <img
-            src={scene.map_url}
-            alt=""
-            className="w-full h-full object-cover"
-          />
-        ) : (
-          <span className="text-stone-600 text-lg">🗺</span>
+      <div className="w-12 h-12 rounded-lg overflow-hidden flex-shrink-0 bg-white/5 border border-white/8 flex items-center justify-center relative">
+        {renderThumbnail()}
+        {isAnimated && scene.map_url && (
+          <span className="absolute bottom-0.5 right-0.5 text-[8px] font-bold bg-amber-500/80 text-white px-0.5 rounded leading-tight">
+            {isVideo ? "VID" : "GIF"}
+          </span>
         )}
       </div>
       <div className="flex-1 min-w-0">
@@ -194,7 +219,6 @@ export default function GameLobby() {
     loading: membersLoading,
     kickMember,
   } = useGameMembers(gameId ?? null);
-
   useEffect(() => {
     const init = async () => {
       const [
@@ -208,7 +232,9 @@ export default function GameLobby() {
         supabase.from("games").select("*").eq("id", gameId).single(),
         supabase
           .from("scenes")
-          .select("id, name, active, map_url, created_at, grid_type, grid_size")
+          .select(
+            "id, name, active, map_url, map_mime_type, created_at, grid_type, grid_size",
+          )
           .eq("game_id", gameId)
           .order("created_at", { ascending: true }),
       ]);
