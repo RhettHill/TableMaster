@@ -14,8 +14,6 @@ import InvitePage from "./pages/InvitePage";
 import ProfilePage from "./pages/ProfilePage";
 import PlansPage from "./pages/PlansPage";
 import CalendarPage from "./pages/CalanderPage";
-import { SceneSettings, GameSettings } from "./store/gameStore";
-import { Token, VisibilityMode } from "./types/Types";
 import CustomSystemBuilder from "./pages/CustomSytemBuilder";
 
 const router = createBrowserRouter([

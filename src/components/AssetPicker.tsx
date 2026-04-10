@@ -67,7 +67,7 @@ export default function AssetPicker({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>("game");
-  const [uploadAsShared, setUploadAsShared] = useState(false);
+  const uploadAsShared = false;
   const [sharingId, setSharingId] = useState<string | null>(null);
   const [proTooltip, setProTooltip] = useState(false);
 

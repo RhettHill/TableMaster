@@ -114,7 +114,6 @@ export default function GMPanel({
     error: scenesError,
     createScene,
     deleteScene,
-    updateSceneMap,
   } = useScenes(gameId);
 
   const handleUpload = async (file: File, options?: { shared?: boolean }) => {

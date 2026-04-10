@@ -50,7 +50,6 @@ export function useAssets(userId: string | null, gameId: string | null) {
       .eq("id", userId)
       .single();
     if (profile) {
-      const plan = profile.plans as any;
       const active = ["active", "trialing", "canceling"].includes(
         profile.subscription_status ?? "",
       );
