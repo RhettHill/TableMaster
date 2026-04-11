@@ -53,7 +53,6 @@ export function useCharacterSheet(
       userId: string,
       systemSlug: string,
       tokenId: string | null,
-      systemIdOverride?: string,
     ) => {
       // Prefer the passed system_id; fall back to slug-based lookup in the RPC
       const { data: sheetId, error } = await supabase.rpc(
@@ -62,9 +61,6 @@ export function useCharacterSheet(
           p_game_id: gameId,
           p_user_id: userId,
           p_system_slug: systemSlug,
-          // p_system_id is an optional param — add it to the RPC if your DB
-          // version supports it; otherwise the slug lookup handles it.
-          ...(systemIdOverride ? { p_system_id: systemIdOverride } : {}),
         },
       );
 
@@ -225,7 +221,7 @@ export function useCharacterSheet(
       const sys = await resolveGameSystem(gameId);
 
       if (sys) {
-        await createAndOpen(gameId, currentUserId, sys.slug, tokenId, sys.id);
+        await createAndOpen(gameId, currentUserId, sys.slug, tokenId);
         return;
       }
 

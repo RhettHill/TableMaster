@@ -90,7 +90,6 @@ export default function GameSession() {
       });
       setGameSystemId(data.system_id);
       setGameSystemSlug(data.systems?.[0]?.slug ?? "dnd5e");
-      console.log(data.system_id);
     };
 
     init();
