@@ -61,6 +61,7 @@ export function useCharacterSheet(
           p_game_id: gameId,
           p_user_id: userId,
           p_system_slug: systemSlug,
+          p_system_id: gameSystemId,
         },
       );
 

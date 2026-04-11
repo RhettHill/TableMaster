@@ -619,6 +619,7 @@ export default function GameSession() {
             p_game_id: gameId,
             p_user_id: user.id,
             p_system_slug: gameSystemSlug || "dnd5e",
+            p_system_id: gameSystemId,
           });
         }
       });
