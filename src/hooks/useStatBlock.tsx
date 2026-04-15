@@ -36,35 +36,34 @@ export function useNpcStatBlocks(gameId: string | null) {
     load();
   }, [load]);
 
-  const create = useCallback(
-    async (systemSlug = "dnd5e") => {
-      if (!gameId) return null;
-      const { data: sys } = await supabase
-        .from("systems")
-        .select("id")
-        .eq("slug", systemSlug)
-        .single();
-      if (!sys) return null;
+  const create = useCallback(async () => {
+    if (!gameId) return null;
+    const { data: customSys } = await supabase
+      .from("systems")
+      .select("id")
+      .eq("game_id", gameId)
+      .eq("custom", true)
+      .maybeSingle();
 
-      const { data: row } = await supabase
-        .from("npc_stat_blocks")
-        .insert({
-          game_id: gameId,
-          system_id: sys.id,
-          name: "New Creature",
-          data: DEFAULT_STAT_BLOCK,
-        })
-        .select("id")
-        .single();
+    const systemId = customSys?.id;
 
-      if (row) {
-        await load();
-        return row.id as string;
-      }
-      return null;
-    },
-    [gameId, load],
-  );
+    const { data: row } = await supabase
+      .from("npc_stat_blocks")
+      .insert({
+        game_id: gameId,
+        system_id: systemId.id,
+        name: "New Creature",
+        data: DEFAULT_STAT_BLOCK,
+      })
+      .select("id")
+      .single();
+
+    if (row) {
+      await load();
+      return row.id as string;
+    }
+    return null;
+  }, [gameId, load]);
 
   const remove = useCallback(async (id: string) => {
     await supabase.from("npc_stat_blocks").delete().eq("id", id);

@@ -14,6 +14,8 @@ interface TokenLayerProps {
   onMoveToken: (id: string, x: number, y: number) => void;
   onContextMenu: (token: TokenType, screenX: number, screenY: number) => void;
   onDeleteTokens: (ids: string[]) => void;
+  /** Called whenever the selection changes — used by parent for arrow-key movement */
+  onSelectionChange?: (ids: string[]) => void;
 }
 
 export default function TokenLayer({
@@ -25,6 +27,7 @@ export default function TokenLayer({
   onMoveToken,
   onContextMenu,
   onDeleteTokens,
+  onSelectionChange,
 }: TokenLayerProps) {
   const tokens = useGameStore((s) => s.tokens);
   const storeMoveToken = useGameStore((s) => s.moveToken);
@@ -33,10 +36,14 @@ export default function TokenLayer({
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const selectedIdsRef = useRef<Set<string>>(new Set());
 
-  const syncSelection = (next: Set<string>) => {
-    selectedIdsRef.current = next;
-    setSelectedIds(next);
-  };
+  const syncSelection = useCallback(
+    (next: Set<string>) => {
+      selectedIdsRef.current = next;
+      setSelectedIds(next);
+      onSelectionChange?.([...next]);
+    },
+    [onSelectionChange],
+  );
 
   const handleSelect = useCallback(
     (token: TokenType, additive: boolean) => {
@@ -55,7 +62,7 @@ export default function TokenLayer({
       }
       syncSelection(next);
     },
-    [isGM],
+    [isGM, syncSelection],
   );
 
   // ── Multi-token drag ───────────────────────────────────────────────────────
@@ -81,7 +88,7 @@ export default function TokenLayer({
           .map((t) => [t.id, { x: t.x, y: t.y }]),
       );
     },
-    [tokens],
+    [tokens, syncSelection],
   );
 
   const handleDragMove = useCallback(
@@ -89,13 +96,11 @@ export default function TokenLayer({
       primaryId: string,
       rawX: number,
       rawY: number,
-      // Konva node ref so we can snap the visual position mid-drag
       node: { x: (v: number) => void; y: (v: number) => void },
     ) => {
       const start = dragStartPrimary.current;
       if (!start) return;
 
-      // Snap the primary token's visual position while dragging
       let sx = rawX;
       let sy = rawY;
       if (snapEnabled) {
@@ -106,7 +111,6 @@ export default function TokenLayer({
         node.y(sy);
       }
 
-      // Move companions by the same delta as the snapped primary
       const dx = sx - start.x;
       const dy = sy - start.y;
       dragStartPositions.current.forEach((startPos, id) => {
@@ -122,7 +126,6 @@ export default function TokenLayer({
       const start = dragStartPrimary.current;
       if (!start) return;
 
-      // Final snapped position of primary
       let fx = rawX;
       let fy = rawY;
       if (snapEnabled) {
@@ -134,7 +137,6 @@ export default function TokenLayer({
       const dx = fx - start.x;
       const dy = fy - start.y;
 
-      // Persist all moved tokens
       dragStartPositions.current.forEach((startPos, id) => {
         onMoveToken(id, startPos.x + dx, startPos.y + dy);
       });
@@ -174,7 +176,7 @@ export default function TokenLayer({
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [tokens, isGM, onDeleteTokens]);
+  }, [tokens, isGM, onDeleteTokens, syncSelection]);
 
   // Clean stale selections
   useEffect(() => {
@@ -182,7 +184,7 @@ export default function TokenLayer({
     const current = selectedIdsRef.current;
     const filtered = new Set([...current].filter((id) => tokenIds.has(id)));
     if (filtered.size !== current.size) syncSelection(filtered);
-  }, [tokens]);
+  }, [tokens, syncSelection]);
 
   return (
     <Group>

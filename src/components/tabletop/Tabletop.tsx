@@ -20,6 +20,7 @@ import AuraLayer from "./AuraLayer";
 import PingLayer from "./PingLayer";
 import type { Wall } from "../../utils/Raycasting";
 import type { VisibilityMode, FogRegion } from "../../hooks/useFog";
+import { useArrowKeyTokenMove } from "../../hooks/useArrowMove";
 
 const MIN_ZOOM = 0.3;
 const MAX_ZOOM = 3;
@@ -177,6 +178,7 @@ export default function Tabletop({
   const mapIsVideo = useGameStore((s) => s.mapIsVideo);
   const setZoomAndCamera = useGameStore((s) => s.setZoomAndCamera);
   const panCamera = useGameStore((s) => s.panCamera);
+  const tokens = useGameStore((s) => s.tokens);
 
   const {
     gridSize,
@@ -190,6 +192,20 @@ export default function Tabletop({
   const feetPerSquare = useMeasurementStore((s) => s.feetPerSquare);
   const coneAngle = useMeasurementStore((s) => s.coneAngle);
   const lineWidth = useMeasurementStore((s) => s.lineWidth);
+
+  // ── Selected token IDs (lifted from TokenLayer) ───────────────────────────
+  const [selectedTokenIds, setSelectedTokenIds] = useState<string[]>([]);
+
+  // ── Arrow key movement ────────────────────────────────────────────────────
+  useArrowKeyTokenMove({
+    selectedTokenIds,
+    gridSize,
+    snapToGrid: snapEnabled,
+    tokens,
+    isGM,
+    currentUserId,
+    onMoveToken,
+  });
 
   const [brushPresetIdx, setBrushPresetIdx] = useState(DEFAULT_BRUSH_IDX);
   const fogBrushRadius = BRUSH_PRESETS[brushPresetIdx].radius;
@@ -543,8 +559,6 @@ export default function Tabletop({
     [zoom, cameraX, cameraY, setZoomAndCamera],
   );
 
-  // True when an HTML overlay is rendering the map (GIF or video).
-  // The Stage must be transparent in this case so the overlay shows through.
   const hasOverlay = mapIsAnimated || mapIsVideo;
 
   const overlayProps = {
@@ -564,11 +578,6 @@ export default function Tabletop({
     >
       {size.width > 0 && (
         <>
-          {/* ── Animated map overlays ─────────────────────────────────────────
-              GIF and video maps are rendered as HTML elements BEHIND the Stage.
-              zIndex:0 puts them behind the Konva canvas (zIndex:1).
-              The Stage background is set to transparent when an overlay is active
-              so the overlay shows through.                                      */}
           {mapIsAnimated && <GifMapOverlay key={map} {...overlayProps} />}
           {mapIsVideo && <VideoMapOverlay key={map} {...overlayProps} />}
 
@@ -593,10 +602,8 @@ export default function Tabletop({
               zIndex: 1,
             }}
           >
-            {/* Layer 1: map + grid + tokens */}
             <Layer>
               <Group x={cameraX} y={cameraY} scaleX={zoom} scaleY={zoom}>
-                {/* For animated maps this returns an empty Group — overlay handles it */}
                 <MapLayer
                   width={mapWidth}
                   height={mapHeight}
@@ -619,12 +626,12 @@ export default function Tabletop({
                     setContextMenu({ token, screenX, screenY })
                   }
                   onDeleteTokens={onDeleteTokens}
+                  onSelectionChange={setSelectedTokenIds}
                 />
                 <PingLayer pings={pings} />
               </Group>
             </Layer>
 
-            {/* Layer 2: walls */}
             {visibilityMode === "lighting" && (
               <WallLayer
                 walls={walls}
@@ -641,7 +648,6 @@ export default function Tabletop({
               />
             )}
 
-            {/* Layer 3: local measurement */}
             {measure && (
               <Layer listening={false}>
                 <Group x={cameraX} y={cameraY} scaleX={zoom} scaleY={zoom}>
@@ -650,7 +656,6 @@ export default function Tabletop({
               </Layer>
             )}
 
-            {/* Layer 4: remote measurements */}
             {remoteMeasures.length > 0 && (
               <Layer listening={false}>
                 <Group x={cameraX} y={cameraY} scaleX={zoom} scaleY={zoom}>
@@ -660,7 +665,6 @@ export default function Tabletop({
             )}
           </Stage>
 
-          {/* Fog overlay — HTML canvas above Konva Stage */}
           <FogLayer
             walls={walls}
             isGM={isGM}

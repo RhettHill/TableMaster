@@ -468,7 +468,7 @@ export default function Dashboard() {
       />
 
       {/* Nav */}
-      <nav className="relative z-10 border-b border-white/6 bg-[#0a0a0f]/80 backdrop-blur-sm sticky top-0">
+      <nav className="relative z-50 border-b border-white/6 bg-[#0a0a0f]/80 backdrop-blur-sm sticky top-0">
         <div className="max-w-6xl mx-auto px-6 h-14 flex items-center justify-between">
           <div className="flex items-center gap-2.5">
             <button

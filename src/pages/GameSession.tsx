@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from "react";
-import { useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import type { User } from "@supabase/supabase-js";
 import { supabase } from "../services/supabase";
 import {
@@ -21,7 +21,6 @@ import Tabletop from "../components/tabletop/Tabletop";
 import Toolbar from "../components/tabletop/Toolbar";
 import GMPanel from "../components/tabletop/GMPanel";
 import CharacterSheet from "../components/sheets/CharacterSheet";
-import SystemPickerModal from "../components/sheets/SystemPickerModal";
 import PlayerPickerModal from "../components/PlayerPickerModal";
 import PresenceHUD from "../components/Presencehud";
 import AssignStatBlockPicker from "../components/StatBlockPicker";
@@ -102,7 +101,23 @@ export default function GameSession() {
     );
 
     return () => listener.subscription.unsubscribe();
-  }, [gameId]); // gameId only — not user
+  }, [gameId]);
+  useEffect(() => {
+    const refetchSystem = async () => {
+      if (!gameId) return;
+      const { data } = await supabase
+        .from("games")
+        .select("system_id, systems:systems!games_system_id_fkey(slug)")
+        .eq("id", gameId)
+        .single();
+      if (data) {
+        setGameSystemId(data.system_id ?? undefined);
+        setGameSystemSlug((data.systems as any)?.[0]?.slug ?? "dnd5e");
+      }
+    };
+    window.addEventListener("focus", refetchSystem);
+    return () => window.removeEventListener("focus", refetchSystem);
+  }, [gameId]);
 
   // ── Store ─────────────────────────────────────────────────────────────────────
   const setMap = useGameStore((s) => s.setMap);
@@ -127,17 +142,15 @@ export default function GameSession() {
   // ── Character sheet ───────────────────────────────────────────────────────────
   const {
     openSheet,
-    needsSystemPick,
     needsPlayerPick,
     openOwn,
     openForToken,
     autoLinkSheet,
-    confirmSystemPick,
-    cancelSystemPick,
+
     confirmPlayerPick,
     cancelPlayerPick,
     closeSheet,
-  } = useCharacterSheet(user?.id ?? "", isGM, gameSystemSlug, gameSystemId);
+  } = useCharacterSheet(user?.id ?? "", isGM);
 
   // ── NPC stat blocks ───────────────────────────────────────────────────────────
   const { assignToToken } = useNpcStatBlocks(gameId ?? null);
@@ -416,8 +429,7 @@ export default function GameSession() {
       const sceneId = activeSceneIdRef.current;
       const userId = user?.id ?? null;
       if (!userId || !sceneId) return;
-      const saved = await dbAddToken(token, sceneId, userId);
-      if (saved) storeAddToken(saved);
+      await dbAddToken(token, sceneId, userId);
     },
     [user, dbAddToken, storeAddToken],
   );
@@ -619,7 +631,6 @@ export default function GameSession() {
             p_game_id: gameId,
             p_user_id: user.id,
             p_system_slug: gameSystemSlug || "dnd5e",
-            p_system_id: gameSystemId,
           });
         }
       });
@@ -629,6 +640,8 @@ export default function GameSession() {
   const [activeTool, setActiveTool] = useState<ActiveTool>("select");
   const [gmPanelOpen, setGmPanelOpen] = useState(false);
   const [diceOpen, setDiceOpen] = useState(false);
+  const navigate = useNavigate();
+  const [confirming, setConfirming] = useState(false);
 
   // ── Loading ───────────────────────────────────────────────────────────────────
   if (!user || !gameId) {
@@ -644,11 +657,38 @@ export default function GameSession() {
     );
   }
 
+  const handleExitClick = () => {
+    if (!confirming) {
+      setConfirming(true);
+      // Auto-cancel after 3 s so it doesn't stay open forever
+      setTimeout(() => setConfirming(false), 3000);
+      return;
+    }
+    navigate(`/game/${gameId}`);
+  };
+
   return (
     <div
       className="relative w-screen h-screen overflow-hidden"
       style={{ background: gameSettings.bgColor }}
     >
+      <div className="absolute top-3 left-3 z-30 pointer-events-auto">
+        <button
+          onClick={handleExitClick}
+          onBlur={() => setTimeout(() => setConfirming(false), 150)}
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-semibold transition-all duration-150 shadow-lg backdrop-blur-sm
+          ${
+            confirming
+              ? "bg-red-500/20 border-red-500/50 text-red-400 hover:bg-red-500/30"
+              : "bg-black/40 border-white/10 text-white/40 hover:text-white/70 hover:border-white/20 hover:bg-black/60"
+          }`}
+          title={isGM ? "Leave game" : "Leave game"}
+        >
+          <span className="text-sm leading-none">{confirming ? "" : "⬡"}</span>
+          {confirming ? "Confirm exit?" : "Exit"}
+        </button>
+      </div>
+
       <Tabletop
         activeTool={activeTool}
         isGM={isGM}
@@ -726,6 +766,7 @@ export default function GameSession() {
 
       {openSheet && (
         <CharacterSheet
+          key={`${openSheet.sheetId}-${gameSystemId ?? "default"}`}
           sheetId={openSheet.sheetId}
           tokenId={openSheet.tokenId}
           gameId={gameId}
@@ -733,13 +774,6 @@ export default function GameSession() {
           isGM={isGM}
           canEdit={openSheet.canEdit}
           onClose={closeSheet}
-        />
-      )}
-      {needsSystemPick && (
-        <SystemPickerModal
-          defaultSystemId={gameSystemId}
-          onConfirm={confirmSystemPick}
-          onCancel={cancelSystemPick}
         />
       )}
       {needsPlayerPick && (
@@ -751,6 +785,7 @@ export default function GameSession() {
       )}
       {openStatBlockId && (
         <NpcStatBlockPanel
+          key={`${openStatBlockId}-${gameSystemId ?? "default"}`}
           statBlockId={openStatBlockId}
           gameId={gameId}
           isGM={isGM}

@@ -1,5 +1,5 @@
 // src/pages/CustomSystemBuilder.tsx
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { supabase } from "../services/supabase";
 import type {
@@ -7,6 +7,17 @@ import type {
   SectionDef,
   FieldDef,
 } from "../components/sheets/GenericSheet";
+import { StatBlockBuilder, StatBlockTemplate } from "./StatBlockBuilder";
+import SystemSwitcher, {
+  BUILTIN_TEMPLATES,
+  SystemOption,
+} from "../utils/SystemSwitcher";
+import {
+  BUILTIN_STAT_BLOCK_TEMPLATES,
+  STARTER_TEMPLATES,
+} from "../components/Templates";
+
+// ── Types ──────────────────────────────────────────────────────────────────────
 
 type FieldType = FieldDef["type"];
 
@@ -28,17 +39,18 @@ const FIELD_TYPES: {
   { value: "select", label: "Dropdown", icon: "▾", desc: "Pick from a list" },
 ];
 
+interface BuiltInSystem {
+  id: string;
+  name: string;
+  slug: string;
+}
+
 interface CustomSystem {
   id: string;
   name: string;
   slug: string;
   sheet_template: SheetTemplate;
-}
-
-interface BuiltInSystem {
-  id: string;
-  name: string;
-  slug: string;
+  stat_block_template?: StatBlockTemplate | null;
 }
 
 function slugify(str: string) {
@@ -54,7 +66,7 @@ function makeSection(): SectionDef {
   return { title: "New Section", fields: [makeField()], columns: 2 };
 }
 
-// ── Field Row ─────────────────────────────────────────────────────────────────
+// ── FieldRow ───────────────────────────────────────────────────────────────────
 
 function FieldRow({
   field,
@@ -133,6 +145,7 @@ function FieldRow({
                 {FIELD_TYPES.map((t) => (
                   <button
                     key={t.value}
+                    title={t.desc}
                     onClick={() =>
                       onChange({
                         ...field,
@@ -143,7 +156,6 @@ function FieldRow({
                             : undefined,
                       })
                     }
-                    title={t.desc}
                     className={`px-2 py-1 rounded-lg text-xs font-semibold border transition-all ${field.type === t.value ? "bg-amber-500/20 border-amber-500/40 text-amber-300" : "bg-white/4 border-white/8 text-white/40 hover:text-white/70 hover:bg-white/8"}`}
                   >
                     {t.label}
@@ -167,7 +179,7 @@ function FieldRow({
                 className="bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-xs text-white/70 font-mono focus:outline-none focus:border-amber-500/40 transition-colors"
               />
               <p className="text-[9px] text-white/20">
-                Unique identifier — data is stored under this key
+                Unique identifier — data stored under this key
               </p>
             </div>
           </div>
@@ -253,7 +265,7 @@ function FieldRow({
   );
 }
 
-// ── Section Card ──────────────────────────────────────────────────────────────
+// ── SectionCard ────────────────────────────────────────────────────────────────
 
 function SectionCard({
   section,
@@ -366,7 +378,7 @@ function SectionCard({
   );
 }
 
-// ── Live Preview ──────────────────────────────────────────────────────────────
+// ── Live Preview ───────────────────────────────────────────────────────────────
 
 function LivePreview({ template }: { template: SheetTemplate }) {
   return (
@@ -377,7 +389,7 @@ function LivePreview({ template }: { template: SheetTemplate }) {
           Live Preview
         </span>
       </div>
-      <div className="p-4 space-y-4 max-h-[40vh] overflow-y-auto">
+      <div className="p-4 space-y-4 max-h-[35vh] overflow-y-auto">
         {template.sections.length === 0 ? (
           <p className="text-white/20 text-xs text-center py-6">
             Add a section to see a preview
@@ -410,7 +422,7 @@ function LivePreview({ template }: { template: SheetTemplate }) {
                       {field.type === "checkbox" ? (
                         <div className="w-4 h-4 rounded border border-white/25 bg-white/5" />
                       ) : field.type === "textarea" ? (
-                        <div className="h-10 rounded bg-white/5 border-b border-white/10" />
+                        <div className="h-8 rounded bg-white/5 border-b border-white/10" />
                       ) : field.type === "select" ? (
                         <div className="h-5 rounded bg-white/5 border-b border-white/10 flex items-center px-1">
                           <span className="text-[10px] text-white/20">
@@ -436,133 +448,62 @@ function LivePreview({ template }: { template: SheetTemplate }) {
   );
 }
 
-// ── System Switcher ───────────────────────────────────────────────────────────
-
-function SystemSwitcher({
-  gameId,
-  builtInSystems,
-  currentSystemId,
-  customSystemId,
-  onSwitched,
-}: {
-  gameId: string;
-  builtInSystems: BuiltInSystem[];
-  currentSystemId: string | null;
-  customSystemId: string | null;
-  onSwitched: (systemId: string) => void;
-}) {
-  const [switching, setSwitching] = useState(false);
-
-  const switchTo = async (systemId: string) => {
-    if (currentSystemId === systemId) return;
-    setSwitching(true);
-    // Update the game's system
-    await supabase
-      .from("games")
-      .update({ system_id: systemId })
-      .eq("id", gameId);
-    // Migrate all existing character sheets in this game to the new system
-    await supabase
-      .from("character_sheets")
-      .update({ system_id: systemId })
-      .eq("game_id", gameId);
-    onSwitched(systemId);
-    setSwitching(false);
-  };
-
-  const allOptions = [
-    ...(customSystemId
-      ? [
-          {
-            id: customSystemId,
-            name: "Custom System",
-            slug: "",
-            isCustom: true,
-          },
-        ]
-      : []),
-    ...builtInSystems.map((s) => ({ ...s, isCustom: false })),
-  ];
-
-  return (
-    <div className="rounded-2xl border border-white/8 bg-white/[0.02] p-4">
-      <p className="text-[10px] font-semibold uppercase tracking-widest text-white/40 mb-3">
-        Active System for This Game
-      </p>
-      <div className="flex flex-col gap-1.5">
-        {allOptions.map((opt) => {
-          const isActive = currentSystemId === opt.id;
-          return (
-            <button
-              key={opt.id}
-              onClick={() => switchTo(opt.id)}
-              disabled={switching || isActive}
-              className={`flex items-center gap-2.5 px-3 py-2.5 rounded-xl border text-left transition-all ${
-                isActive
-                  ? opt.isCustom
-                    ? "bg-amber-500/15 border-amber-500/40 text-amber-300 cursor-default"
-                    : "bg-sky-500/15 border-sky-500/40 text-sky-300 cursor-default"
-                  : "bg-white/4 border-white/8 text-white/50 hover:bg-white/8 hover:border-white/15 disabled:opacity-50"
-              }`}
-            >
-              <span className="text-sm">{opt.isCustom ? "⚙" : "📋"}</span>
-              <div className="flex-1 min-w-0">
-                <p className="text-xs font-semibold">{opt.name}</p>
-                <p className="text-[10px] text-white/30">
-                  {opt.isCustom ? "Your builder template" : "Built-in system"}
-                </p>
-              </div>
-              {isActive && (
-                <span
-                  className={`text-xs flex-shrink-0 ${opt.isCustom ? "text-amber-400" : "text-sky-400"}`}
-                >
-                  ✓ Active
-                </span>
-              )}
-            </button>
-          );
-        })}
-      </div>
-      {switching && (
-        <p className="text-[10px] text-amber-400/60 text-center mt-2 animate-pulse">
-          Switching — updating all player sheets…
-        </p>
-      )}
-      <p className="text-[9px] text-white/20 mt-3 leading-relaxed">
-        Switching updates all existing character sheets in this game. Player
-        data is preserved.
-      </p>
-    </div>
-  );
-}
-
-// ── Main ──────────────────────────────────────────────────────────────────────
+// ── Main ───────────────────────────────────────────────────────────────────────
 
 export default function CustomSystemBuilder() {
   const { gameId } = useParams<{ gameId: string }>();
   const navigate = useNavigate();
 
+  // ── Auth / access ──────────────────────────────────────────────────────────
   const [isPro, setIsPro] = useState<boolean | null>(null);
   const [isGM, setIsGM] = useState(false);
+  const [loading, setLoading] = useState(true);
+
+  // ── Systems ────────────────────────────────────────────────────────────────
+  const [builtInSystems, setBuiltInSystems] = useState<BuiltInSystem[]>([]);
+  const [existingCustomSystem, setExistingCustomSystem] =
+    useState<CustomSystem | null>(null);
+
+  // The system_id currently saved as active in games table
+  const [activeSystemId, setActiveSystemId] = useState<string | null>(null);
+
+  // The system currently loaded in the editor (local selection — not yet saved)
+  const [selectedSystemId, setSelectedSystemId] = useState<string | null>(null);
+
+  // ── Working copy state ─────────────────────────────────────────────────────
+  // These represent what's currently in the editor. They start as a copy of
+  // whatever system the user selected, and diverge as they edit.
   const [systemName, setSystemName] = useState("");
   const [sections, setSections] = useState<SectionDef[]>([makeSection()]);
-  const [existingSystem, setExistingSystem] = useState<CustomSystem | null>(
-    null,
-  );
-  const [builtInSystems, setBuiltInSystems] = useState<BuiltInSystem[]>([]);
-  const [currentGameSystemId, setCurrentGameSystemId] = useState<string | null>(
-    null,
-  );
+  const [statBlockTemplate, setStatBlockTemplate] =
+    useState<StatBlockTemplate | null>(null);
+
+  // Snapshot of the working copy at the moment it was loaded (for dirty detection)
+  const baselineRef = useRef<{
+    sections: SectionDef[];
+    name: string;
+    statBlock: StatBlockTemplate | null;
+  } | null>(null);
+  const isDirty = (() => {
+    if (!baselineRef.current) return false;
+    return (
+      JSON.stringify(sections) !==
+        JSON.stringify(baselineRef.current.sections) ||
+      systemName !== baselineRef.current.name ||
+      JSON.stringify(statBlockTemplate) !==
+        JSON.stringify(baselineRef.current.statBlock)
+    );
+  })();
+
+  // ── Tabs ───────────────────────────────────────────────────────────────────
+  const [activeTab, setActiveTab] = useState<
+    "build" | "preview" | "json" | "statblock"
+  >("build");
   const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState(false);
+  const [savedMsg, setSavedMsg] = useState(false);
   const [error, setError] = useState("");
-  const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<"build" | "preview" | "json">(
-    "build",
-  );
 
-  const template: SheetTemplate = { sections };
-
+  // ── Load initial data ──────────────────────────────────────────────────────
   useEffect(() => {
     const init = async () => {
       const {
@@ -600,27 +541,273 @@ export default function CustomSystemBuilder() {
       const planPrice = (profile?.plans as any)?.price_monthly ?? 0;
       setIsPro(hasSub && planPrice > 0);
       setIsGM(game?.owner_id === user.id);
-      setCurrentGameSystemId(game?.system_id ?? null);
-      setBuiltInSystems((systems ?? []) as BuiltInSystem[]);
 
-      const { data: sys } = await supabase
+      const allBuiltIn = (systems ?? []) as BuiltInSystem[];
+      setBuiltInSystems(allBuiltIn);
+
+      const savedActiveId = game?.system_id ?? null;
+      setActiveSystemId(savedActiveId);
+
+      // Load this game's custom system if one exists
+      const { data: customSys } = await supabase
         .from("systems")
-        .select("id, name, slug, sheet_template")
+        .select("id, name, slug, sheet_template, stat_block_template")
         .eq("game_id", gameId)
         .eq("custom", true)
         .maybeSingle();
 
-      if (sys) {
-        setExistingSystem(sys as CustomSystem);
-        setSystemName(sys.name);
-        if (sys.sheet_template?.sections?.length)
-          setSections(sys.sheet_template.sections);
+      if (customSys) setExistingCustomSystem(customSys as CustomSystem);
+
+      // Determine which system to load into the editor on open:
+      // Priority: the game's active system → custom if exists → first built-in
+      const targetId =
+        savedActiveId ?? customSys?.id ?? allBuiltIn[0]?.id ?? null;
+      setSelectedSystemId(targetId);
+
+      // Load that system's template into the editor
+      if (targetId) {
+        if (customSys && targetId === customSys.id) {
+          loadCustomIntoEditor(customSys as CustomSystem);
+        } else {
+          const builtIn = allBuiltIn.find((s) => s.id === targetId);
+          if (builtIn) loadBuiltInIntoEditor(builtIn);
+        }
       }
 
       setLoading(false);
     };
     init();
   }, [gameId]);
+
+  // ── Load helpers ───────────────────────────────────────────────────────────
+
+  const loadCustomIntoEditor = useCallback((sys: CustomSystem) => {
+    const name = sys.name;
+    const secs = sys.sheet_template?.sections ?? [makeSection()];
+    const sb = sys.stat_block_template ?? null;
+    setSystemName(name);
+    setSections(secs);
+    setStatBlockTemplate(sb);
+    baselineRef.current = {
+      sections: JSON.parse(JSON.stringify(secs)),
+      name,
+      statBlock: JSON.parse(JSON.stringify(sb)),
+    };
+  }, []);
+
+  const loadBuiltInIntoEditor = useCallback((sys: BuiltInSystem) => {
+    // Load the built-in's representative templates for both sheet and stat block.
+    const sheetTpl = BUILTIN_TEMPLATES[sys.slug];
+    const sbTpl = BUILTIN_STAT_BLOCK_TEMPLATES[sys.slug] ?? null;
+    const secs = sheetTpl
+      ? JSON.parse(JSON.stringify(sheetTpl.sections))
+      : [makeSection()];
+    const name = sys.name;
+    setSystemName(name);
+    setSections(secs);
+    setStatBlockTemplate(sbTpl ? JSON.parse(JSON.stringify(sbTpl)) : null);
+    baselineRef.current = {
+      sections: JSON.parse(JSON.stringify(secs)),
+      name,
+      statBlock: sbTpl ? JSON.parse(JSON.stringify(sbTpl)) : null,
+    };
+  }, []);
+
+  // ── System selection (from switcher) ──────────────────────────────────────
+
+  const handleSelectSystem = useCallback(
+    (opt: SystemOption) => {
+      if (opt.id === selectedSystemId) return; // already selected
+
+      // Warn about discarding edits (unless it's a clean state)
+      if (isDirty) {
+        if (
+          !window.confirm(`Discard unsaved changes and switch to ${opt.name}?`)
+        )
+          return;
+      }
+
+      setSelectedSystemId(opt.id);
+      setError("");
+
+      if (opt.isCustom && existingCustomSystem) {
+        loadCustomIntoEditor(existingCustomSystem);
+      } else {
+        // Built-in
+        const builtIn = builtInSystems.find((s) => s.id === opt.id);
+        if (builtIn) loadBuiltInIntoEditor(builtIn);
+      }
+    },
+    [
+      selectedSystemId,
+      isDirty,
+      existingCustomSystem,
+      builtInSystems,
+      loadCustomIntoEditor,
+      loadBuiltInIntoEditor,
+    ],
+  );
+
+  // ── Save & Activate ────────────────────────────────────────────────────────
+  // Always saves as a custom system (upsert), then activates it.
+  // Even if the user started from a built-in template — once they press Save,
+  // it becomes a custom system override for this game.
+
+  const handleSave = async () => {
+    if (!systemName.trim()) {
+      setError("Give your system a name first.");
+      return;
+    }
+    if (sections.length === 0) {
+      setError("Add at least one section.");
+      return;
+    }
+    setError("");
+    setSaving(true);
+
+    const slug = `custom_${gameId}_${slugify(systemName)}`;
+    const sheet_template: SheetTemplate = { sections };
+
+    let savedSystemId: string;
+
+    if (existingCustomSystem) {
+      // Update the existing custom system row
+      await supabase
+        .from("systems")
+        .update({
+          name: systemName,
+          slug,
+          sheet_template,
+          stat_block_template: statBlockTemplate ?? null,
+        })
+        .eq("id", existingCustomSystem.id);
+      savedSystemId = existingCustomSystem.id;
+      setExistingCustomSystem({
+        ...existingCustomSystem,
+        name: systemName,
+        slug,
+        sheet_template,
+        stat_block_template: statBlockTemplate,
+      });
+    } else {
+      // Create a new custom system row for this game
+      const { data: newSys, error: insertErr } = await supabase
+        .from("systems")
+        .insert({
+          name: systemName,
+          slug,
+          sheet_template,
+          stat_block_template: statBlockTemplate ?? null,
+          game_id: gameId,
+          custom: true,
+        })
+        .select("id, name, slug, sheet_template, stat_block_template")
+        .single();
+      if (insertErr || !newSys) {
+        setError(insertErr?.message ?? "Failed to create system");
+        setSaving(false);
+        return;
+      }
+      savedSystemId = newSys.id;
+      setExistingCustomSystem(newSys as CustomSystem);
+    }
+
+    // Activate this custom system for the game:
+    // 1. Update the game's active system
+    await supabase
+      .from("games")
+      .update({ system_id: savedSystemId })
+      .eq("id", gameId);
+
+    // 2. Delete all character sheets — avoids unique constraint (game_id, user_id, system_id).
+    //    Players get a fresh blank sheet of the new system next time they open it.
+    await supabase.from("character_sheets").delete().eq("game_id", gameId);
+
+    // 3. Clear stale sheet_id references on tokens (sheet rows no longer exist)
+    //    Get all scene IDs for this game, then null out sheet_id on their tokens.
+    const { data: sceneIds } = await supabase
+      .from("scenes")
+      .select("id")
+      .eq("game_id", gameId);
+    if (sceneIds?.length) {
+      await supabase
+        .from("tokens")
+        .update({ sheet_id: null })
+        .in(
+          "scene_id",
+          sceneIds.map((s: any) => s.id),
+        );
+    }
+
+    // 4. Reset NPC stat blocks data to blank (no unique constraint issue here)
+    await supabase
+      .from("npc_stat_blocks")
+      .update({ system_id: savedSystemId, data: {} })
+      .eq("game_id", gameId);
+
+    // Update local state
+    setActiveSystemId(savedSystemId);
+    setSelectedSystemId(savedSystemId);
+    baselineRef.current = {
+      sections: JSON.parse(JSON.stringify(sections)),
+      name: systemName,
+      statBlock: JSON.parse(JSON.stringify(statBlockTemplate)),
+    };
+
+    setSaving(false);
+    setSavedMsg(true);
+    setTimeout(() => setSavedMsg(false), 3000);
+  };
+
+  // ── Revert to built-in ─────────────────────────────────────────────────────
+  // When the GM wants to switch the game BACK to a built-in system without
+  // creating a custom one. This writes to the DB immediately (it's an explicit
+  // "discard custom and use built-in" action).
+
+  const handleActivateBuiltIn = async (sys: BuiltInSystem) => {
+    if (
+      !window.confirm(
+        `Activate ${sys.name} as the game system? This will reset all character sheets and stat blocks to blank.`,
+      )
+    )
+      return;
+    setSaving(true);
+
+    await supabase.from("games").update({ system_id: sys.id }).eq("id", gameId);
+    // Delete sheets rather than update system_id — avoids unique constraint collision.
+    // Players get a fresh blank sheet of the new system when they next open it.
+    await supabase.from("character_sheets").delete().eq("game_id", gameId);
+
+    // Clear stale sheet_id references on tokens
+    const { data: sceneIds } = await supabase
+      .from("scenes")
+      .select("id")
+      .eq("game_id", gameId);
+    if (sceneIds?.length) {
+      await supabase
+        .from("tokens")
+        .update({ sheet_id: null })
+        .in(
+          "scene_id",
+          sceneIds.map((s: any) => s.id),
+        );
+    }
+
+    // NPC stat blocks don't have the same unique constraint, just reset data
+    await supabase
+      .from("npc_stat_blocks")
+      .update({ system_id: sys.id, data: {} })
+      .eq("game_id", gameId);
+
+    setActiveSystemId(sys.id);
+    setSelectedSystemId(sys.id);
+    loadBuiltInIntoEditor(sys);
+    setSaving(false);
+    setSavedMsg(true);
+    setTimeout(() => setSavedMsg(false), 3000);
+  };
+
+  // ── Section helpers ────────────────────────────────────────────────────────
 
   const setSection = useCallback((i: number, s: SectionDef) => {
     setSections((prev) => {
@@ -642,70 +829,31 @@ export default function CustomSystemBuilder() {
     });
   }, []);
 
-  const handleSave = async () => {
-    if (!systemName.trim()) {
-      setError("Give your system a name first.");
-      return;
-    }
-    if (sections.length === 0) {
-      setError("Add at least one section.");
-      return;
-    }
-    setError("");
-    setSaving(true);
+  // ── Derived data ───────────────────────────────────────────────────────────
 
-    const slug = `custom_${gameId}_${slugify(systemName)}`;
-    const sheet_template: SheetTemplate = { sections };
-    let savedSystemId: string | null = existingSystem?.id ?? null;
+  const selectedIsCustom =
+    existingCustomSystem && selectedSystemId === existingCustomSystem.id;
+  const selectedIsBuiltIn = !selectedIsCustom;
+  const selectedBuiltIn = builtInSystems.find((s) => s.id === selectedSystemId);
 
-    if (existingSystem) {
-      await supabase
-        .from("systems")
-        .update({ name: systemName, sheet_template })
-        .eq("id", existingSystem.id);
-    } else {
-      const { data: newSys, error: insertErr } = await supabase
-        .from("systems")
-        .insert({
-          name: systemName,
-          slug,
-          sheet_template,
-          game_id: gameId,
-          custom: true,
-        })
-        .select("id, name, slug, sheet_template")
-        .single();
-      if (insertErr) {
-        setError(insertErr.message);
-        setSaving(false);
-        return;
-      }
-      if (newSys) {
-        setExistingSystem(newSys as CustomSystem);
-        savedSystemId = newSys.id;
-      }
-    }
-
-    // Auto-switch game to this custom system on first save,
-    // and update all existing player sheets so they use the new renderer.
-    if (savedSystemId && currentGameSystemId !== savedSystemId) {
-      await supabase
-        .from("games")
-        .update({ system_id: savedSystemId })
-        .eq("id", gameId);
-      await supabase
-        .from("character_sheets")
-        .update({ system_id: savedSystemId })
-        .eq("game_id", gameId);
-      setCurrentGameSystemId(savedSystemId);
-    }
-
-    setSaving(false);
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2500);
-  };
+  // System options for the switcher
+  const systemOptions: SystemOption[] = [
+    ...(existingCustomSystem
+      ? [
+          {
+            id: existingCustomSystem.id,
+            name: existingCustomSystem.name,
+            slug: existingCustomSystem.slug,
+            isCustom: true,
+          },
+        ]
+      : []),
+    ...builtInSystems.map((s) => ({ ...s, isCustom: false })),
+  ];
 
   const fieldCount = sections.reduce((acc, s) => acc + s.fields.length, 0);
+
+  // ── Render guards ──────────────────────────────────────────────────────────
 
   if (loading)
     return (
@@ -721,7 +869,7 @@ export default function CustomSystemBuilder() {
       </div>
     );
 
-  if (isPro === false) {
+  if (isPro === false)
     return (
       <div
         className="min-h-screen bg-[#0a0a0f] flex items-center justify-center px-6"
@@ -733,8 +881,8 @@ export default function CustomSystemBuilder() {
             Custom System Builder
           </h1>
           <p className="text-stone-400 text-sm leading-relaxed mb-6">
-            Build your own character sheet layout for any RPG system — no code
-            required. Available on the Plus or Pro plan.
+            Build your own character sheet layout for any RPG system. Available
+            on Plus or Pro.
           </p>
           <button
             onClick={() => navigate("/plans")}
@@ -751,7 +899,8 @@ export default function CustomSystemBuilder() {
         </div>
       </div>
     );
-  }
+
+  // ── Main render ────────────────────────────────────────────────────────────
 
   return (
     <div
@@ -766,7 +915,8 @@ export default function CustomSystemBuilder() {
         }}
       />
 
-      <nav className="relative z-10 border-b border-white/6 bg-[#0a0a0f]/90 backdrop-blur-sm sticky top-0">
+      {/* Nav */}
+      <nav className="relative z-50 border-b border-white/6 bg-[#0a0a0f]/90 backdrop-blur-sm sticky top-0">
         <div className="max-w-6xl mx-auto px-6 h-14 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <button
@@ -777,64 +927,90 @@ export default function CustomSystemBuilder() {
             </button>
             <span className="text-white/10">/</span>
             <span className="text-amber-400 text-sm font-semibold flex items-center gap-1.5">
-              <span>⚙</span> System Builder
+              ⚙ System Builder
             </span>
             <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/15 border border-amber-500/25 text-amber-400 font-bold uppercase tracking-wider">
               Pro
             </span>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-3">
             <span className="text-stone-600 text-xs hidden sm:block">
               {sections.length} section{sections.length !== 1 ? "s" : ""} ·{" "}
               {fieldCount} field{fieldCount !== 1 ? "s" : ""}
             </span>
-            {saved && (
-              <span className="text-emerald-400 text-xs flex items-center gap-1">
-                <span>✓</span> Saved
+            {savedMsg && (
+              <span className="text-emerald-400 text-xs">
+                ✓ Saved &amp; activated
               </span>
             )}
-            <button
-              onClick={handleSave}
-              disabled={saving}
-              className="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-bold text-sm transition-all shadow-lg shadow-amber-900/30 disabled:opacity-50"
-            >
-              {saving
-                ? "Saving…"
-                : existingSystem
-                  ? "Update System"
-                  : "Save System"}
-            </button>
+            {isDirty && !savedMsg && (
+              <span className="text-amber-400/60 text-xs">Unsaved changes</span>
+            )}
+            {/* Show "Activate [built-in]" when user has a built-in selected without edits */}
+            {selectedIsBuiltIn &&
+              selectedBuiltIn &&
+              !isDirty &&
+              selectedSystemId !== activeSystemId && (
+                <button
+                  onClick={() => handleActivateBuiltIn(selectedBuiltIn)}
+                  disabled={saving}
+                  className="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-bold text-sm transition-all shadow-lg disabled:opacity-50"
+                >
+                  {saving ? "Activating…" : `Activate ${selectedBuiltIn.name}`}
+                </button>
+              )}
+            {/* Show "Save & Activate" when editing (custom selected OR dirty from a built-in) */}
+            {(selectedIsCustom || isDirty) && (
+              <button
+                onClick={handleSave}
+                disabled={saving}
+                className="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-bold text-sm transition-all shadow-lg shadow-amber-900/30 disabled:opacity-50"
+              >
+                {saving ? "Saving…" : "Save & Activate"}
+              </button>
+            )}
           </div>
         </div>
       </nav>
 
       <div className="relative z-10 max-w-6xl mx-auto px-6 py-8">
-        <div className="mb-8">
-          <h1 className="text-3xl font-bold text-white mb-1">
-            Custom System Builder
-          </h1>
+        <div className="mb-6">
+          <h1 className="text-3xl font-bold text-white mb-1">System Builder</h1>
           <p className="text-stone-500 text-sm">
-            Design a character sheet for any RPG. Saving automatically switches
-            this game to your custom system.
+            Select a system to view or edit its template. Any edits create a
+            custom version. Press{" "}
+            <span className="text-white/60 font-semibold">
+              Save &amp; Activate
+            </span>{" "}
+            to apply to this game.
           </p>
         </div>
 
+        {/* System name — only editable when working on a custom system */}
         <div className="mb-6 flex flex-col sm:flex-row gap-4 items-start sm:items-center">
           <div className="flex flex-col gap-1.5 flex-1 max-w-md">
             <label className="text-[10px] text-white/40 uppercase tracking-widest font-semibold">
-              System Name
+              {isDirty || selectedIsCustom
+                ? "Custom System Name"
+                : "Viewing Template"}
             </label>
             <input
               type="text"
               value={systemName}
               onChange={(e) => setSystemName(e.target.value)}
-              placeholder="e.g. Call of Cthulhu, Blades in the Dark, Homebrew…"
-              className="bg-white/5 border border-white/10 focus:border-amber-500/50 rounded-xl px-4 py-2.5 text-sm text-white placeholder-stone-600 focus:outline-none focus:ring-2 focus:ring-amber-500/10 transition-all"
+              placeholder="e.g. My Homebrew System…"
+              disabled={!isDirty && !selectedIsCustom}
+              className="bg-white/5 border border-white/10 focus:border-amber-500/50 rounded-xl px-4 py-2.5 text-sm text-white placeholder-stone-600 focus:outline-none focus:ring-2 focus:ring-amber-500/10 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
             />
+            {!isDirty && selectedIsBuiltIn && (
+              <p className="text-[10px] text-white/25">
+                Edit any field below to start customising this system
+              </p>
+            )}
           </div>
-          {existingSystem && currentGameSystemId === existingSystem.id && (
+          {activeSystemId === existingCustomSystem?.id && (
             <div className="flex items-center gap-2 px-3 py-2 rounded-xl border border-emerald-500/20 bg-emerald-500/5 text-emerald-400/70 text-xs">
-              <span>✓</span> Active — players are using this sheet
+              ✓ Custom system active
             </div>
           )}
         </div>
@@ -845,25 +1021,49 @@ export default function CustomSystemBuilder() {
           </div>
         )}
 
+        {/* Tabs */}
         <div className="flex gap-1 mb-6 border-b border-white/8">
-          {(["build", "preview", "json"] as const).map((tab) => (
+          {(["build", "preview", "json", "statblock"] as const).map((tab) => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
               className={`px-4 py-2 text-xs font-semibold uppercase tracking-wider border-b-2 transition-all ${activeTab === tab ? "text-amber-400 border-amber-500" : "text-white/30 border-transparent hover:text-white/60"}`}
             >
               {tab === "build"
-                ? "Builder"
+                ? "Character Sheet"
                 : tab === "preview"
                   ? "Preview"
-                  : "JSON Output"}
+                  : tab === "json"
+                    ? "JSON Output"
+                    : "Stat Block"}
             </button>
           ))}
         </div>
 
+        {/* Build tab */}
         {activeTab === "build" && (
           <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-6">
+            {/* Section editor */}
             <div className="flex flex-col gap-4">
+              {/* Read-only notice for unmodified built-in */}
+              {selectedIsBuiltIn && !isDirty && (
+                <div className="flex items-start gap-3 px-4 py-3 rounded-xl border border-sky-500/20 bg-sky-500/5">
+                  <span className="text-sky-400 text-sm flex-shrink-0 mt-0.5">
+                    ℹ
+                  </span>
+                  <div>
+                    <p className="text-sky-300/80 text-xs font-semibold">
+                      Viewing {systemName} template
+                    </p>
+                    <p className="text-white/35 text-xs mt-0.5">
+                      This is the built-in layout. Edit any field to start
+                      customising — your changes will be saved as a custom
+                      system overlay for this game.
+                    </p>
+                  </div>
+                </div>
+              )}
+
               {sections.length === 0 ? (
                 <div className="flex flex-col items-center justify-center h-40 border border-dashed border-white/10 rounded-2xl text-white/25 text-sm gap-2">
                   <span className="text-2xl opacity-30">📋</span>No sections yet
@@ -890,16 +1090,16 @@ export default function CustomSystemBuilder() {
               </button>
             </div>
 
+            {/* Right sidebar */}
             <div className="flex flex-col gap-4">
-              <LivePreview template={template} />
+              <LivePreview template={{ sections }} />
 
-              {/* System switcher — key feature: lets GM revert to built-in */}
               <SystemSwitcher
-                gameId={gameId!}
-                builtInSystems={builtInSystems}
-                currentSystemId={currentGameSystemId}
-                customSystemId={existingSystem?.id ?? null}
-                onSwitched={(systemId) => setCurrentGameSystemId(systemId)}
+                options={systemOptions}
+                activeSystemId={activeSystemId}
+                selectedId={selectedSystemId}
+                isDirty={isDirty}
+                onSelect={handleSelectSystem}
               />
 
               <div className="rounded-2xl border border-white/8 bg-white/[0.02] p-4">
@@ -909,26 +1109,28 @@ export default function CustomSystemBuilder() {
                 <ul className="flex flex-col gap-2 text-xs text-stone-400 leading-relaxed">
                   <li className="flex gap-2">
                     <span className="text-amber-500 flex-shrink-0">◆</span>Use{" "}
-                    <strong className="text-white/60">hp</strong> and{" "}
-                    <strong className="text-white/60">maxHp</strong> as keys to
-                    sync HP to the token bar
+                    <strong className="text-white/60">hp</strong> /{" "}
+                    <strong className="text-white/60">maxHp</strong> to sync to
+                    the token HP bar
                   </li>
                   <li className="flex gap-2">
                     <span className="text-amber-500 flex-shrink-0">◆</span>Use{" "}
-                    <strong className="text-white/60">ac</strong> to sync Armor
-                    Class to the token badge
+                    <strong className="text-white/60">ac</strong> to sync to the
+                    token AC badge
                   </li>
                   <li className="flex gap-2">
-                    <span className="text-amber-500 flex-shrink-0">◆</span>Keys
-                    must be unique — lowercase with underscores
+                    <span className="text-amber-500 flex-shrink-0">◆</span>
+                    Editing a built-in template creates a custom system for this
+                    game only
                   </li>
                   <li className="flex gap-2">
-                    <span className="text-amber-500 flex-shrink-0">◆</span>1
-                    column for notes, 2–3 for stat grids
+                    <span className="text-amber-500 flex-shrink-0">◆</span>
+                    Activating a system resets all sheets in this game to blank
                   </li>
                 </ul>
               </div>
 
+              {/* Quick-start templates */}
               <div className="rounded-2xl border border-white/8 bg-white/[0.02] p-4">
                 <p className="text-[10px] font-semibold uppercase tracking-widest text-white/30 mb-3">
                   Quick-start Templates
@@ -939,18 +1141,15 @@ export default function CustomSystemBuilder() {
                       key={t.name}
                       onClick={() => {
                         if (
-                          sections.length > 1 ||
-                          sections[0].fields.length > 1
-                        ) {
-                          if (
-                            !window.confirm(
-                              "Replace your current sheet with this template?",
-                            )
+                          isDirty &&
+                          !window.confirm(
+                            "Replace your current sections with this template?",
                           )
-                            return;
-                        }
-                        setSections(t.sections);
-                        if (!systemName) setSystemName(t.name);
+                        )
+                          return;
+                        setSections(JSON.parse(JSON.stringify(t.sections)));
+                        if (!systemName || systemName === selectedBuiltIn?.name)
+                          setSystemName(t.name);
                       }}
                       className="flex items-center gap-2 px-3 py-2 rounded-xl bg-white/3 hover:bg-white/6 border border-white/8 hover:border-white/15 text-left transition-all group"
                     >
@@ -969,99 +1168,103 @@ export default function CustomSystemBuilder() {
           </div>
         )}
 
+        {/* Preview tab */}
         {activeTab === "preview" && (
           <div className="max-w-2xl">
             <p className="text-stone-500 text-sm mb-4">
-              This is how your sheet will look to players in-game.
+              {isDirty
+                ? "Preview of your unsaved changes."
+                : `Viewing the ${systemName} template.`}
             </p>
             <div className="rounded-2xl border border-white/10 bg-[#0f0f1c] overflow-hidden">
               <div className="px-4 py-2.5 border-b border-white/8 flex items-center gap-2">
                 <span className="text-white/50 text-sm font-semibold">
-                  {systemName || "Custom System"}
+                  {systemName}
                 </span>
                 <span className="text-white/20 text-xs">· Character Sheet</span>
+                {isDirty && (
+                  <span className="text-amber-400/50 text-[10px] ml-auto">
+                    Unsaved
+                  </span>
+                )}
               </div>
               <div className="p-4 space-y-4">
-                {sections.length === 0 ? (
-                  <p className="text-white/20 text-xs text-center py-8">
-                    Nothing to preview — add sections in the Builder tab
-                  </p>
-                ) : (
-                  sections.map((section, si) => {
-                    const cols = section.columns ?? 2;
-                    const gridCls =
-                      cols === 1
-                        ? "grid-cols-1"
-                        : cols === 3
-                          ? "grid-cols-3"
-                          : "grid-cols-2";
-                    return (
-                      <div key={si}>
-                        <div className="text-[9px] font-bold text-amber-400/60 uppercase tracking-widest text-center mb-2 border-b border-amber-500/10 pb-0.5">
-                          {section.title}
-                        </div>
-                        <div className={`grid ${gridCls} gap-x-4 gap-y-3`}>
-                          {section.fields.map((field, fi) => (
-                            <div
-                              key={fi}
-                              className={
-                                field.type === "textarea" ? "col-span-full" : ""
-                              }
-                            >
-                              <div className="text-[9px] text-white/30 uppercase tracking-wider mb-1">
-                                {field.label}
-                              </div>
-                              {field.type === "checkbox" ? (
-                                <div className="w-4 h-4 rounded border border-white/25" />
-                              ) : field.type === "textarea" ? (
-                                <div className="h-16 rounded bg-white/5 border-b border-white/10" />
-                              ) : field.type === "select" ? (
-                                <select className="bg-[#0d0d14] text-white/50 text-xs border-b border-white/10 focus:outline-none w-full py-1">
-                                  {(field.options ?? []).map((o) => (
-                                    <option key={o}>{o}</option>
-                                  ))}
-                                </select>
-                              ) : (
-                                <div className="border-b border-white/10 py-1">
-                                  <span className="text-[11px] text-white/20">
-                                    {field.placeholder ?? ""}
-                                  </span>
-                                </div>
-                              )}
-                            </div>
-                          ))}
-                        </div>
+                {sections.map((section, si) => {
+                  const cols = section.columns ?? 2;
+                  const gridCls =
+                    cols === 1
+                      ? "grid-cols-1"
+                      : cols === 3
+                        ? "grid-cols-3"
+                        : "grid-cols-2";
+                  return (
+                    <div key={si}>
+                      <div className="text-[9px] font-bold text-amber-400/60 uppercase tracking-widest text-center mb-2 border-b border-amber-500/10 pb-0.5">
+                        {section.title}
                       </div>
-                    );
-                  })
-                )}
+                      <div className={`grid ${gridCls} gap-x-4 gap-y-3`}>
+                        {section.fields.map((field, fi) => (
+                          <div
+                            key={fi}
+                            className={
+                              field.type === "textarea" ? "col-span-full" : ""
+                            }
+                          >
+                            <div className="text-[9px] text-white/30 uppercase tracking-wider mb-1">
+                              {field.label}
+                            </div>
+                            {field.type === "checkbox" ? (
+                              <div className="w-4 h-4 rounded border border-white/25" />
+                            ) : field.type === "textarea" ? (
+                              <div className="h-16 rounded bg-white/5 border-b border-white/10" />
+                            ) : field.type === "select" ? (
+                              <select className="bg-[#0d0d14] text-white/50 text-xs border-b border-white/10 focus:outline-none w-full py-1">
+                                {(field.options ?? []).map((o) => (
+                                  <option key={o}>{o}</option>
+                                ))}
+                              </select>
+                            ) : (
+                              <div className="border-b border-white/10 py-1">
+                                <span className="text-[11px] text-white/20">
+                                  {field.placeholder ?? ""}
+                                </span>
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           </div>
         )}
 
+        {/* JSON tab */}
         {activeTab === "json" && (
           <div className="max-w-3xl">
             <p className="text-stone-500 text-sm mb-4">
-              This JSON is stored in the{" "}
+              The{" "}
               <code className="text-white/40 bg-white/5 px-1 rounded">
                 sheet_template
               </code>{" "}
-              column and read by{" "}
-              <code className="text-white/40 bg-white/5 px-1 rounded">
-                GenericSheet
-              </code>
-              .
+              JSON stored in the systems table.
+              {isDirty && (
+                <span className="text-amber-400/70 ml-2">
+                  (showing unsaved working copy)
+                </span>
+              )}
             </p>
             <div className="rounded-2xl border border-white/10 bg-[#0d0d14] overflow-hidden">
               <div className="flex items-center justify-between px-4 py-2.5 border-b border-white/8">
                 <span className="text-[10px] text-white/30 font-mono uppercase tracking-widest">
-                  SheetTemplate JSON
+                  sheet_template JSON
                 </span>
                 <button
                   onClick={() =>
                     navigator.clipboard.writeText(
-                      JSON.stringify(template, null, 2),
+                      JSON.stringify({ sections }, null, 2),
                     )
                   }
                   className="text-[10px] text-amber-400/60 hover:text-amber-400 transition-colors px-2 py-1 rounded bg-amber-500/10 border border-amber-500/20"
@@ -1069,211 +1272,43 @@ export default function CustomSystemBuilder() {
                   Copy
                 </button>
               </div>
-              <pre className="p-4 text-[11px] text-emerald-400/80 font-mono overflow-auto max-h-[60vh] leading-relaxed">
-                {JSON.stringify(template, null, 2)}
+              <pre className="p-4 text-[11px] text-emerald-400/80 font-mono overflow-auto max-h-[50vh] leading-relaxed">
+                {JSON.stringify({ sections }, null, 2)}
               </pre>
             </div>
+            {statBlockTemplate && (
+              <div className="rounded-2xl border border-white/10 bg-[#0d0d14] overflow-hidden mt-4">
+                <div className="flex items-center justify-between px-4 py-2.5 border-b border-white/8">
+                  <span className="text-[10px] text-white/30 font-mono uppercase tracking-widest">
+                    stat_block_template JSON
+                  </span>
+                  <button
+                    onClick={() =>
+                      navigator.clipboard.writeText(
+                        JSON.stringify(statBlockTemplate, null, 2),
+                      )
+                    }
+                    className="text-[10px] text-violet-400/60 hover:text-violet-400 transition-colors px-2 py-1 rounded bg-violet-500/10 border border-violet-500/20"
+                  >
+                    Copy
+                  </button>
+                </div>
+                <pre className="p-4 text-[11px] text-violet-400/80 font-mono overflow-auto max-h-[50vh] leading-relaxed">
+                  {JSON.stringify(statBlockTemplate, null, 2)}
+                </pre>
+              </div>
+            )}
           </div>
+        )}
+
+        {/* Stat block tab */}
+        {activeTab === "statblock" && (
+          <StatBlockBuilder
+            initialTemplate={statBlockTemplate ?? undefined}
+            onChange={setStatBlockTemplate}
+          />
         )}
       </div>
     </div>
   );
 }
-
-// ── Starter templates ─────────────────────────────────────────────────────────
-
-const STARTER_TEMPLATES: {
-  name: string;
-  icon: string;
-  desc: string;
-  sections: SectionDef[];
-}[] = [
-  {
-    name: "Generic OSR",
-    icon: "🗡",
-    desc: "Old-school stats, saves, HP",
-    sections: [
-      {
-        title: "Character Info",
-        columns: 2,
-        fields: [
-          { key: "characterName", label: "Name", type: "text" },
-          { key: "class", label: "Class", type: "text" },
-          { key: "level", label: "Level", type: "number", min: 1, max: 20 },
-          {
-            key: "alignment",
-            label: "Alignment",
-            type: "select",
-            options: ["Lawful", "Neutral", "Chaotic"],
-          },
-        ],
-      },
-      {
-        title: "Ability Scores",
-        columns: 3,
-        fields: [
-          { key: "str", label: "STR", type: "number", min: 3, max: 18 },
-          { key: "dex", label: "DEX", type: "number", min: 3, max: 18 },
-          { key: "con", label: "CON", type: "number", min: 3, max: 18 },
-          { key: "int", label: "INT", type: "number", min: 3, max: 18 },
-          { key: "wis", label: "WIS", type: "number", min: 3, max: 18 },
-          { key: "cha", label: "CHA", type: "number", min: 3, max: 18 },
-        ],
-      },
-      {
-        title: "Combat",
-        columns: 3,
-        fields: [
-          { key: "hp", label: "HP", type: "number" },
-          { key: "maxHp", label: "Max HP", type: "number" },
-          { key: "ac", label: "AC", type: "number" },
-          { key: "thac0", label: "THAC0", type: "number" },
-          { key: "speed", label: "Speed", type: "text", placeholder: "120ft" },
-        ],
-      },
-      {
-        title: "Saving Throws",
-        columns: 3,
-        fields: [
-          { key: "save_death", label: "Death/Poison", type: "number" },
-          { key: "save_wands", label: "Wands", type: "number" },
-          { key: "save_stone", label: "Paralysis", type: "number" },
-          { key: "save_breath", label: "Breath", type: "number" },
-          { key: "save_magic", label: "Spells", type: "number" },
-        ],
-      },
-      {
-        title: "Notes",
-        columns: 1,
-        fields: [
-          { key: "equipment", label: "Equipment", type: "textarea" },
-          { key: "notes", label: "Notes", type: "textarea" },
-        ],
-      },
-    ],
-  },
-  {
-    name: "Blades in the Dark",
-    icon: "🕯",
-    desc: "Stress, trauma, action ratings",
-    sections: [
-      {
-        title: "Character",
-        columns: 2,
-        fields: [
-          { key: "name", label: "Name", type: "text" },
-          {
-            key: "playbook",
-            label: "Playbook",
-            type: "select",
-            options: [
-              "Cutter",
-              "Hound",
-              "Leech",
-              "Lurk",
-              "Slide",
-              "Spider",
-              "Whisper",
-            ],
-          },
-          { key: "heritage", label: "Heritage", type: "text" },
-          { key: "background", label: "Background", type: "text" },
-          { key: "vice", label: "Vice", type: "text" },
-        ],
-      },
-      {
-        title: "Stress & Trauma",
-        columns: 2,
-        fields: [
-          { key: "stress", label: "Stress", type: "number", min: 0, max: 9 },
-          {
-            key: "maxStress",
-            label: "Max Stress",
-            type: "number",
-            min: 0,
-            max: 9,
-          },
-          {
-            key: "trauma",
-            label: "Trauma",
-            type: "textarea",
-            placeholder: "Cold, Haunted, Obsessed…",
-          },
-        ],
-      },
-      {
-        title: "Insight",
-        columns: 3,
-        fields: [
-          { key: "hunt", label: "Hunt", type: "number", min: 0, max: 4 },
-          { key: "study", label: "Study", type: "number", min: 0, max: 4 },
-          { key: "survey", label: "Survey", type: "number", min: 0, max: 4 },
-          { key: "tinker", label: "Tinker", type: "number", min: 0, max: 4 },
-        ],
-      },
-      {
-        title: "Prowess",
-        columns: 3,
-        fields: [
-          { key: "finesse", label: "Finesse", type: "number", min: 0, max: 4 },
-          { key: "prowl", label: "Prowl", type: "number", min: 0, max: 4 },
-          {
-            key: "skirmish",
-            label: "Skirmish",
-            type: "number",
-            min: 0,
-            max: 4,
-          },
-          { key: "wreck", label: "Wreck", type: "number", min: 0, max: 4 },
-        ],
-      },
-      {
-        title: "Resolve",
-        columns: 3,
-        fields: [
-          { key: "attune", label: "Attune", type: "number", min: 0, max: 4 },
-          { key: "command", label: "Command", type: "number", min: 0, max: 4 },
-          { key: "consort", label: "Consort", type: "number", min: 0, max: 4 },
-          { key: "sway", label: "Sway", type: "number", min: 0, max: 4 },
-        ],
-      },
-      {
-        title: "Notes",
-        columns: 1,
-        fields: [
-          { key: "abilities", label: "Special Abilities", type: "textarea" },
-          { key: "notes", label: "Notes", type: "textarea" },
-        ],
-      },
-    ],
-  },
-  {
-    name: "Minimal Free-form",
-    icon: "📝",
-    desc: "Name, stats, notes — blank slate",
-    sections: [
-      {
-        title: "Character",
-        columns: 2,
-        fields: [
-          { key: "name", label: "Name", type: "text" },
-          { key: "concept", label: "Concept", type: "text" },
-        ],
-      },
-      {
-        title: "Stats",
-        columns: 3,
-        fields: [
-          { key: "hp", label: "HP", type: "number" },
-          { key: "maxHp", label: "Max HP", type: "number" },
-          { key: "ac", label: "Defense", type: "number" },
-        ],
-      },
-      {
-        title: "Notes",
-        columns: 1,
-        fields: [{ key: "notes", label: "Notes", type: "textarea" }],
-      },
-    ],
-  },
-];

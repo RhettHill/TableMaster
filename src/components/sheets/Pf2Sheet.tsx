@@ -596,7 +596,7 @@ export default function Pf2eSheet({ data, canEdit, isGM, onChange }: Props) {
   };
 
   return (
-    <div className="flex flex-col h-full text-white/80">
+    <div className="flex flex-col h-full text-white/80 p-2">
       <Tabs tabs={TABS} active={tab} onChange={setTab} />
 
       {/* ── IDENTITY ── */}

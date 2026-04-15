@@ -29,12 +29,12 @@ export function useTokens() {
   const addToken = async (
     token: Token,
     sceneId: string,
-    ownerId: string,
+    _ownerId: string, // 👈 keep param if needed elsewhere, but ignore it
   ): Promise<Token | null> => {
     const { data, error } = await supabase
       .from("tokens")
       .insert({
-        scene_id: sceneId, // explicit, never null
+        scene_id: sceneId,
         name: token.name,
         image_url: token.image_url,
         x: token.x,
@@ -42,7 +42,9 @@ export function useTokens() {
         rotation: token.rotation,
         scale: token.scale,
         visible: token.visible,
-        owner_id: ownerId,
+
+        owner_id: null, // ✅ THIS IS THE FIX
+        player_editable: false, // ✅ strongly recommended
       })
       .select()
       .single();
