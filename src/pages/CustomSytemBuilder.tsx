@@ -707,11 +707,6 @@ export default function CustomSystemBuilder() {
     }
   };
 
-  // ── Revert to built-in ─────────────────────────────────────────────────────
-  // When the GM wants to switch the game BACK to a built-in system without
-  // creating a custom one. This writes to the DB immediately (it's an explicit
-  // "discard custom and use built-in" action).
-
   const handleActivateBuiltIn = async (sys: BuiltInSystem) => {
     if (
       !window.confirm(
