@@ -49,6 +49,22 @@ export default function ResetPassword() {
         if (event === "PASSWORD_RECOVERY") {
           setSessionReady(true);
         }
+
+        const hash = window.location.hash;
+        if (hash && hash.includes("type=recovery")) {
+          supabase.auth.getSession().then(({ data }) => {
+            if (data.session) setSessionReady(true);
+          });
+        }
+
+        const { data: listener } = supabase.auth.onAuthStateChange(
+          (event, _session) => {
+            if (event === "PASSWORD_RECOVERY") {
+              setSessionReady(true);
+            }
+          },
+        );
+        return () => listener.subscription.unsubscribe();
       },
     );
     return () => listener.subscription.unsubscribe();
