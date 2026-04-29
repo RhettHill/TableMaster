@@ -9,7 +9,6 @@ interface NpcLibraryPanelProps {
 
 export default function NpcLibraryPanel({
   gameId,
-  gameSystemSlug,
   onOpenStatBlock,
 }: NpcLibraryPanelProps) {
   const { statBlocks, loading, create, remove } = useNpcStatBlocks(gameId);
@@ -17,7 +16,7 @@ export default function NpcLibraryPanel({
 
   const handleCreate = async () => {
     setCreating(true);
-    const id = await create(gameSystemSlug);
+    const id = await create();
     if (id) onOpenStatBlock(id);
     setCreating(false);
   };

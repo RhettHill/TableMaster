@@ -668,10 +668,7 @@ export default function CustomSystemBuilder() {
     const slug = `custom_${gameId}_${slugify(systemName)}`;
     const sheet_template: SheetTemplate = { sections };
 
-    let savedSystemId: string;
-
     if (existingCustomSystem) {
-      // Update the existing custom system row
       await supabase
         .from("systems")
         .update({
@@ -681,7 +678,6 @@ export default function CustomSystemBuilder() {
           stat_block_template: statBlockTemplate ?? null,
         })
         .eq("id", existingCustomSystem.id);
-      savedSystemId = existingCustomSystem.id;
       setExistingCustomSystem({
         ...existingCustomSystem,
         name: systemName,
@@ -690,7 +686,6 @@ export default function CustomSystemBuilder() {
         stat_block_template: statBlockTemplate,
       });
     } else {
-      // Create a new custom system row for this game
       const { data: newSys, error: insertErr } = await supabase
         .from("systems")
         .insert({
@@ -708,55 +703,8 @@ export default function CustomSystemBuilder() {
         setSaving(false);
         return;
       }
-      savedSystemId = newSys.id;
       setExistingCustomSystem(newSys as CustomSystem);
     }
-
-    // Activate this custom system for the game:
-    // 1. Update the game's active system
-    await supabase
-      .from("games")
-      .update({ system_id: savedSystemId })
-      .eq("id", gameId);
-
-    // 2. Delete all character sheets — avoids unique constraint (game_id, user_id, system_id).
-    //    Players get a fresh blank sheet of the new system next time they open it.
-    await supabase.from("character_sheets").delete().eq("game_id", gameId);
-
-    // 3. Clear stale sheet_id references on tokens (sheet rows no longer exist)
-    //    Get all scene IDs for this game, then null out sheet_id on their tokens.
-    const { data: sceneIds } = await supabase
-      .from("scenes")
-      .select("id")
-      .eq("game_id", gameId);
-    if (sceneIds?.length) {
-      await supabase
-        .from("tokens")
-        .update({ sheet_id: null })
-        .in(
-          "scene_id",
-          sceneIds.map((s: any) => s.id),
-        );
-    }
-
-    // 4. Reset NPC stat blocks data to blank (no unique constraint issue here)
-    await supabase
-      .from("npc_stat_blocks")
-      .update({ system_id: savedSystemId, data: {} })
-      .eq("game_id", gameId);
-
-    // Update local state
-    setActiveSystemId(savedSystemId);
-    setSelectedSystemId(savedSystemId);
-    baselineRef.current = {
-      sections: JSON.parse(JSON.stringify(sections)),
-      name: systemName,
-      statBlock: JSON.parse(JSON.stringify(statBlockTemplate)),
-    };
-
-    setSaving(false);
-    setSavedMsg(true);
-    setTimeout(() => setSavedMsg(false), 3000);
   };
 
   // ── Revert to built-in ─────────────────────────────────────────────────────
@@ -767,33 +715,22 @@ export default function CustomSystemBuilder() {
   const handleActivateBuiltIn = async (sys: BuiltInSystem) => {
     if (
       !window.confirm(
-        `Activate ${sys.name} as the game system? This will reset all character sheets and stat blocks to blank.`,
+        `Activate ${sys.name} as the game system? This will reset all character sheets to blank.`,
       )
     )
       return;
     setSaving(true);
 
+    // 1. Point the game at the built-in system
     await supabase.from("games").update({ system_id: sys.id }).eq("id", gameId);
-    // Delete sheets rather than update system_id — avoids unique constraint collision.
-    // Players get a fresh blank sheet of the new system when they next open it.
-    await supabase.from("character_sheets").delete().eq("game_id", gameId);
 
-    // Clear stale sheet_id references on tokens
-    const { data: sceneIds } = await supabase
-      .from("scenes")
-      .select("id")
-      .eq("game_id", gameId);
-    if (sceneIds?.length) {
-      await supabase
-        .from("tokens")
-        .update({ sheet_id: null })
-        .in(
-          "scene_id",
-          sceneIds.map((s: any) => s.id),
-        );
-    }
+    // 2. UPDATE existing sheets in place (reset data, keep sheet ids + token links)
+    await supabase.rpc("reset_sheets_for_new_system", {
+      p_game_id: gameId,
+      p_system_id: sys.id,
+    });
 
-    // NPC stat blocks don't have the same unique constraint, just reset data
+    // 3. Reset NPC stat blocks
     await supabase
       .from("npc_stat_blocks")
       .update({ system_id: sys.id, data: {} })

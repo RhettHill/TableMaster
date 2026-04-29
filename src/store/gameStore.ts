@@ -19,6 +19,14 @@ export interface GameSettings {
   bgColor: string;
 }
 
+// Cached metadata for the currently loaded game — avoids re-fetching on tab switch
+export interface GameMeta {
+  gameId: string;
+  ownerId: string;
+  systemId: string | null;
+  systemSlug: string;
+}
+
 export const DEFAULT_SCENE_SETTINGS: SceneSettings = {
   gridSize: 70,
   gridOpacity: 0.2,
@@ -39,11 +47,8 @@ export const DEFAULT_GAME_SETTINGS: GameSettings = {
 interface GameState {
   tokens: Token[];
   map: string;
-  /** MIME type of the active map asset — needed by MapLayer for GIF/video detection */
   mapMimeType: string | null;
-  /** True when the active map is an animated GIF */
   mapIsAnimated: boolean;
-  /** True when the active map is a video (mp4/webm) */
   mapIsVideo: boolean;
   zoom: number;
   cameraX: number;
@@ -51,6 +56,11 @@ interface GameState {
   sceneSettings: SceneSettings;
   gameSettings: GameSettings;
   visibilityMode: VisibilityMode;
+
+  // ── Game metadata cache ───────────────────────────────────────────────────
+  // Populated once when entering a game session. Cleared when leaving.
+  // Prevents redundant fetches on window focus / re-render.
+  gameMeta: GameMeta | null;
 
   setTokens: (tokens: Token[]) => void;
   addToken: (token: Token) => void;
@@ -65,6 +75,7 @@ interface GameState {
   setSceneSettings: (settings: Partial<SceneSettings>) => void;
   setGameSettings: (settings: Partial<GameSettings>) => void;
   setVisibilityMode: (mode: VisibilityMode) => void;
+  setGameMeta: (meta: GameMeta | null) => void;
 }
 
 const VIDEO_MIME = new Set(["video/mp4", "video/webm"]);
@@ -82,8 +93,10 @@ export const useGameStore = create<GameState>((set) => ({
   sceneSettings: DEFAULT_SCENE_SETTINGS,
   gameSettings: DEFAULT_GAME_SETTINGS,
   visibilityMode: "fog",
+  gameMeta: null,
 
   setVisibilityMode: (mode) => set({ visibilityMode: mode }),
+  setGameMeta: (meta) => set({ gameMeta: meta }),
 
   setTokens: (tokens) => set({ tokens }),
   addToken: (token) => set((state) => ({ tokens: [...state.tokens, token] })),
@@ -104,15 +117,6 @@ export const useGameStore = create<GameState>((set) => ({
   panCamera: (x, y) => set({ cameraX: x, cameraY: y }),
   setZoomAndCamera: (zoom, x, y) => set({ zoom, cameraX: x, cameraY: y }),
 
-  /**
-   * Set the active map URL and optionally its MIME type + animated flags.
-   * MapLayer uses mapIsAnimated / mapIsVideo to select the correct renderer
-   * without relying on file extensions (R2 URLs have no extension).
-   *
-   * Pass mimeType when available (most reliable).
-   * Pass isAnimated / isVideo as fallbacks when mimeType is null/unknown
-   * (e.g. loaded from DB asset row that has is_animated but no mime_type).
-   */
   setMap: (map, mimeType = null, isAnimatedFallback = false, isVideoFallback = false) =>
     set({
       map,
@@ -120,7 +124,7 @@ export const useGameStore = create<GameState>((set) => ({
       mapIsVideo: mimeType ? VIDEO_MIME.has(mimeType) : isVideoFallback,
       mapIsAnimated: mimeType
         ? GIF_MIME.has(mimeType)
-        : (isAnimatedFallback && !isVideoFallback),
+        : isAnimatedFallback && !isVideoFallback,
     }),
 
   setSceneSettings: (settings) =>

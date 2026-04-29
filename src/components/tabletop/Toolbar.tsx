@@ -2,6 +2,7 @@ import type { ActiveTool } from "../../types/Types";
 import type { VisibilityMode } from "../../hooks/useFog";
 import { useMeasurementStore, SnapMode } from "../../store/MeasurementStore";
 import VisionRadiusControl from "./visionRadiusContol";
+import { useEffect } from "react";
 
 interface ToolbarProps {
   activeTool: ActiveTool;
@@ -101,7 +102,7 @@ function SnapButton({
       <div className="absolute left-12 top-1/2 -translate-y-1/2 pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity duration-150 z-50">
         <div className="bg-black/90 border border-white/15 rounded-md px-2.5 py-1.5 whitespace-nowrap">
           <span className="text-white/80 text-xs">
-            Snap: {isCenter ? "Cell Centre" : "Cell Corner"} — click to toggle
+            Snap: {isCenter ? "Cell Center" : "Cell Corner"} — click to toggle
           </span>
         </div>
       </div>
@@ -168,6 +169,20 @@ export default function Toolbar({
 
   const showVisionControl =
     !isGM && visibilityMode === "lighting" && currentUserId && onEditStats;
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "t") {
+        toggleSnap();
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [snapMode]);
 
   return (
     <div className="pointer-events-none h-full flex items-center">

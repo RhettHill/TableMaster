@@ -189,7 +189,7 @@ export default function GMPanel({
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-white/10 flex-shrink-0">
           <span className="text-white/70 text-sm font-semibold tracking-wide flex items-center gap-2">
-            <span className="text-amber-400">⚔</span> GM Tools
+            GM Tools
           </span>
           <button
             onClick={onClose}

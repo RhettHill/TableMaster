@@ -10,6 +10,7 @@ interface TokenProps {
   gridType: GridType;
   snapEnabled: boolean;
   isGM: boolean;
+  currentUserId: string;
   selected?: boolean;
   draggable?: boolean;
   onDragStart?: () => void;
@@ -160,6 +161,7 @@ export default function Token({
   gridSize,
   gridType,
   isGM,
+  currentUserId,
   selected = false,
   draggable = false,
   onDragStart,
@@ -175,16 +177,18 @@ export default function Token({
   if (!token.visible && !isGM) return null;
 
   const isHidden = !token.visible;
-  const canDrag = draggable && (isGM || token.player_editable);
   const stats = token.stats_json;
-  const showStats = stats?.showStats === true; // visible to everyone when enabled
+  const showStats = stats?.showStats === true;
+
+  // Is this token owned by the current user?
+  const isOwner = token.owner_id === currentUserId;
 
   const handleContextMenu = (e: KonvaEventObject<PointerEvent>) => {
     e.evt.preventDefault();
     if (!onContextMenu) return;
-
     // GM can right-click any token.
-    // Players can only right-click tokens they can edit.
+    // Players can right-click player_editable tokens (to view sheet/stats)
+    // but the menu itself will gate what they can actually do.
     if (!isGM && !token.player_editable) return;
 
     const stage = e.target.getStage();
@@ -208,7 +212,7 @@ export default function Token({
       rotation={token.rotation}
       scaleX={token.scale}
       scaleY={token.scale}
-      draggable={canDrag}
+      draggable={draggable}
       onDragStart={onDragStart}
       onDragMove={onDragMove}
       onDragEnd={onDragEnd}
@@ -227,7 +231,9 @@ export default function Token({
               ? "rgba(99,179,237,0.9)"
               : isHidden
                 ? "transparent"
-                : "rgba(255,255,255,0.6)"
+                : isOwner && !isGM
+                  ? "rgba(99,179,237,0.6)" // subtle blue tint for own token
+                  : "rgba(255,255,255,0.6)"
           }
           strokeWidth={selected ? 2.5 : 2}
           shadowColor="black"

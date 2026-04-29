@@ -252,9 +252,9 @@ export default function PlansPage() {
   const isFree = (plan: Plan) => plan.price_monthly === 0;
 
   const hasActivePaidSub =
-    !!profile?.stripe_subscription_id &&
-    (profile?.subscription_status === "active" ||
-      profile?.subscription_status === "trialing");
+    profile?.subscription_status === "active" ||
+    profile?.subscription_status === "trialing";
+
   return (
     <div
       className="min-h-screen bg-[#0a0a0f] text-white"
@@ -266,7 +266,7 @@ export default function PlansPage() {
           className={`fixed top-4 left-1/2 -translate-x-1/2 z-50 px-5 py-3 rounded-xl border shadow-2xl text-sm font-medium
           ${
             toast.type === "success"
-              ? "bg-emerald-500/15 border-emerald-500/30 text-emerald-300"
+              ? "bg-emerald-500/15 border-emerald-500/30 text-emerald-300 z-60"
               : "bg-red-500/15 border-red-500/30 text-red-300"
           }`}
         >
@@ -319,7 +319,11 @@ export default function PlansPage() {
               onClick={() => navigate("/")}
               className="text-white font-bold tracking-wide flex items-center gap-2.5"
             >
-              <span className="text-amber-500">⚔</span>
+              <img
+                src="/swords.png"
+                height={16}
+                width={16}
+              />
               TableMaster
             </button>
             <button

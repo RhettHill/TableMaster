@@ -386,8 +386,6 @@ export default function SettingsPanel({
   onClearFog,
   visibilityMode,
   onSetVisibilityMode,
-  consolidateFog,
-  revealedRegionCount = 0,
 }: SettingsPanelProps) {
   const sceneSettings = useGameStore((s) => s.sceneSettings);
   const gameSettings = useGameStore((s) => s.gameSettings);
@@ -400,7 +398,6 @@ export default function SettingsPanel({
   const [hasLightingAccess, setHasLightingAccess] = useState(false);
   const [isPro, setIsPro] = useState(false);
   const [planCheckDone, setPlanCheckDone] = useState(false);
-  const [consolidating, setConsolidating] = useState(false);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -477,22 +474,6 @@ export default function SettingsPanel({
       600,
     );
   };
-
-  const handleConsolidate = async () => {
-    if (!consolidateFog) return;
-    setConsolidating(true);
-    await consolidateFog();
-    // Brief visual feedback
-    setTimeout(() => setConsolidating(false), 800);
-  };
-
-  // Colour the region count badge: green < 100, amber < 300, red >= 300
-  const regionBadgeColor =
-    revealedRegionCount >= 300
-      ? "bg-red-500/15 border-red-500/30 text-red-400"
-      : revealedRegionCount >= 100
-        ? "bg-amber-500/15 border-amber-500/30 text-amber-400"
-        : "bg-white/5 border-white/10 text-white/30";
 
   return (
     <div className="flex flex-col gap-6 p-4">
@@ -634,42 +615,6 @@ export default function SettingsPanel({
         {visibilityMode !== "none" && (
           <div className="flex flex-col gap-2 mt-1">
             {/* Region count + optimize */}
-            <div className="flex items-center justify-between px-3 py-2 rounded-lg bg-white/3 border border-white/8">
-              <div className="flex items-center gap-2">
-                <span className="text-[10px] text-white/40">Fog regions</span>
-                <span
-                  className={`text-[10px] px-1.5 py-0.5 rounded border tabular-nums font-mono ${regionBadgeColor}`}
-                >
-                  {revealedRegionCount}
-                </span>
-                {revealedRegionCount >= 100 && (
-                  <span className="text-[9px] text-white/25">
-                    {revealedRegionCount >= 300
-                      ? "⚠ High — optimize"
-                      : "Consider optimizing"}
-                  </span>
-                )}
-              </div>
-              {consolidateFog && (
-                <button
-                  onClick={handleConsolidate}
-                  disabled={consolidating || revealedRegionCount < 10}
-                  title="Remove redundant fog circles to improve performance"
-                  className="flex items-center gap-1.5 px-2 py-1 rounded-md text-[10px] font-semibold
-                    bg-sky-500/15 hover:bg-sky-500/25 border border-sky-500/25 hover:border-sky-500/50
-                    text-sky-400 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
-                >
-                  {consolidating ? (
-                    <>
-                      <span className="w-2.5 h-2.5 border border-sky-400/40 border-t-sky-400 rounded-full animate-spin" />
-                      Optimizing…
-                    </>
-                  ) : (
-                    <>⚡ Optimize</>
-                  )}
-                </button>
-              )}
-            </div>
 
             {onClearFog && (
               <button

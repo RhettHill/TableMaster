@@ -581,7 +581,7 @@ export default function CalendarPage() {
               onClick={() => navigate("/")}
               className="text-white font-bold tracking-wide flex items-center gap-2.5"
             >
-              <span className="text-amber-500">⚔</span>
+              <img src="/swords.png" height={16} width={16} />
               TableMaster
             </button>
             <button

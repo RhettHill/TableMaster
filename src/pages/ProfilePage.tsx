@@ -187,7 +187,7 @@ export default function ProfilePage() {
             ← Campaigns
           </button>
           <div className="flex items-center gap-2">
-            <span className="text-amber-500">⚔</span>
+            <img src="/swords.png" height={16} width={16} />{" "}
             <span className="text-white font-bold text-sm hidden sm:block">
               TableMaster
             </span>

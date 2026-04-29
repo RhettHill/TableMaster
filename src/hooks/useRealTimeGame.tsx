@@ -1,3 +1,8 @@
+// src/hooks/useRealTimeGame.tsx
+// Only change from the original: the Token UPDATE postgres_changes handler
+// now includes owner_id in the patch so when the GM assigns a token,
+// all connected clients immediately see the new owner and lock permissions correctly.
+
 import { useEffect, useRef, useState, useCallback } from "react";
 import { supabase } from "../services/supabase";
 import { useGameStore } from "../store/gameStore";
@@ -81,9 +86,6 @@ export function useRealtimeGame({
     Map<string, RemoteMeasure>
   >(new Map());
 
-  // ── Refs ──────────────────────────────────────────────────────────────────────
-  // All callbacks kept in refs so the channel useEffect never needs to re-run
-  // when they change (avoids unsubscribe/resubscribe on every render).
   const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
   const subscribedRef = useRef(false);
   const activeSceneRef = useRef(activeSceneId);
@@ -125,21 +127,17 @@ export function useRealtimeGame({
     onPingRef.current = onPing;
   }, [onPing]);
 
-  // ── Channel setup — runs once per gameId+userId ───────────────────────────────
   useEffect(() => {
     if (!gameId || !userId) return;
 
     subscribedRef.current = false;
 
     const channel = supabase.channel(`game-${gameId}`, {
-      config: {
-        presence: { key: userId },
-        broadcast: { ack: false },
-      },
+      config: { presence: { key: userId }, broadcast: { ack: false } },
     });
     channelRef.current = channel;
 
-    // ── Token INSERT ────────────────────────────────────────────────────────────
+    // Token INSERT
     channel.on(
       "postgres_changes",
       { event: "INSERT", schema: "public", table: "tokens" },
@@ -151,7 +149,8 @@ export function useRealtimeGame({
       },
     );
 
-    // ── Token UPDATE (non-position fields — position comes via broadcast) ───────
+    // Token UPDATE — include owner_id so ownership changes propagate immediately
+    // to all clients and permission checks (canControlToken) use fresh data.
     channel.on(
       "postgres_changes",
       { event: "UPDATE", schema: "public", table: "tokens" },
@@ -161,6 +160,7 @@ export function useRealtimeGame({
         storeUpdateToken(token.id, {
           visible: token.visible,
           player_editable: token.player_editable,
+          owner_id: token.owner_id, // ← ADDED: propagate ownership changes
           stats_json: token.stats_json,
           token_size: token.token_size,
           name: token.name,
@@ -169,7 +169,7 @@ export function useRealtimeGame({
       },
     );
 
-    // ── Token DELETE ────────────────────────────────────────────────────────────
+    // Token DELETE
     channel.on(
       "postgres_changes",
       { event: "DELETE", schema: "public", table: "tokens" },
@@ -179,7 +179,7 @@ export function useRealtimeGame({
       },
     );
 
-    // ── Token position broadcast ────────────────────────────────────────────────
+    // Token position broadcast
     channel.on("broadcast", { event: "token_move" }, ({ payload }) => {
       const { senderId, id, x, y } = payload as {
         senderId: string;
@@ -191,7 +191,7 @@ export function useRealtimeGame({
       storeUpdateToken(id, { x, y });
     });
 
-    // ── Scene changes ───────────────────────────────────────────────────────────
+    // Scene changes
     channel.on(
       "postgres_changes",
       {
@@ -202,23 +202,15 @@ export function useRealtimeGame({
       },
       async (payload) => {
         const scene = payload.new as Scene & { visibility_mode?: string };
-
         if (scene.id === activeSceneRef.current) {
           if (scene.map_url)
-            if (scene.map_url)
-              setMap(scene.map_url, (scene as any).map_mime_type ?? null);
-
-          if (!isGMRef.current) {
-            onSceneSettingsChangeRef.current?.(scene);
-          }
-
-          if (scene.visibility_mode !== undefined) {
+            setMap(scene.map_url, (scene as any).map_mime_type ?? null);
+          if (!isGMRef.current) onSceneSettingsChangeRef.current?.(scene);
+          if (scene.visibility_mode !== undefined)
             onFogSceneUpdateRef.current?.({
               visibility_mode: scene.visibility_mode,
             });
-          }
         }
-
         if (
           scene.active &&
           scene.id !== activeSceneRef.current &&
@@ -229,7 +221,7 @@ export function useRealtimeGame({
       },
     );
 
-    // ── Measurement broadcast ───────────────────────────────────────────────────
+    // Measurement broadcast
     channel.on("broadcast", { event: "measure_update" }, ({ payload }) => {
       const { senderId, measure } = payload as {
         senderId: string;
@@ -260,24 +252,24 @@ export function useRealtimeGame({
       });
     });
 
-    // ── Fog broadcast ───────────────────────────────────────────────────────────
+    // Fog broadcast
     channel.on("broadcast", { event: "fog" }, ({ payload }) => {
       onFogBroadcastRef.current?.(payload as FogBroadcastEvent);
     });
 
-    // ── Wall broadcast ──────────────────────────────────────────────────────────
+    // Wall broadcast
     channel.on("broadcast", { event: "wall" }, ({ payload }) => {
       onWallBroadcastRef.current?.(payload as WallBroadcastEvent);
     });
 
-    // ── Ping broadcast ──────────────────────────────────────────────────────────
+    // Ping broadcast
     channel.on("broadcast", { event: "ping" }, ({ payload }) => {
       const p = payload as RemotePing;
       if (p.senderId === userId) return;
       onPingRef.current?.(p);
     });
 
-    // ── Presence ────────────────────────────────────────────────────────────────
+    // Presence
     channel.on("presence", { event: "sync" }, () => {
       const state = channel.presenceState<{
         displayName: string;
@@ -297,7 +289,6 @@ export function useRealtimeGame({
       onPresenceChangeRef.current(users);
     });
 
-    // ── Subscribe + presence track ──────────────────────────────────────────────
     channel.subscribe(async (status) => {
       if (status !== "SUBSCRIBED") return;
       subscribedRef.current = true;
@@ -319,10 +310,7 @@ export function useRealtimeGame({
       channel.unsubscribe();
       channelRef.current = null;
     };
-  }, [gameId, userId]); // intentionally minimal — all callbacks go through refs
-
-  // ── Outbound send helpers ─────────────────────────────────────────────────────
-  // All use channelRef so they work regardless of when the channel subscribes.
+  }, [gameId, userId]);
 
   const sendFog = useCallback((event: FogBroadcastEvent) => {
     const send = () =>
@@ -331,22 +319,17 @@ export function useRealtimeGame({
         event: "fog",
         payload: event,
       });
-
     if (subscribedRef.current) {
       send();
       return;
     }
-
-    // Retry until subscribed (handles fast first paints)
     let attempts = 0;
     const interval = setInterval(() => {
       attempts++;
       if (subscribedRef.current) {
         clearInterval(interval);
         send();
-      } else if (attempts > 60) {
-        clearInterval(interval);
-      }
+      } else if (attempts > 60) clearInterval(interval);
     }, 50);
   }, []);
 

@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import type { User } from "@supabase/supabase-js";
 import { supabase } from "../services/supabase";
+import { useAuthStore } from "../store/AuthStore";
 import {
   useGameStore,
   SceneSettings,
@@ -36,90 +36,98 @@ import { useMeasurementStore } from "../store/MeasurementStore";
 
 export default function GameSession() {
   const { gameId } = useParams<{ gameId: string }>();
+  const user = useAuthStore((s) => s.user);
 
-  // ── Auth + GM check (merged to eliminate race condition) ──────────────────────
-  // Previously these were two separate effects: one set `user` state, the other
-  // depended on `user` state. On first load `user` is null so the GM check
-  // bailed immediately, and by the time auth resolved the effect had already run.
-  // Fix: await getSession() directly inside one effect so currentUser is available
-  // before the game query fires, with no state dependency between them.
-  const [user, setUser] = useState<User | null>(null);
-  const [isGM, setIsGM] = useState(false);
-  const [gameSystemId, setGameSystemId] = useState<string | undefined>(
-    undefined,
-  );
-  const [gameSystemSlug, setGameSystemSlug] = useState<string>("dnd5e");
+  // ── Game metadata — read from cache first, fetch only if missing ──────────
+  const gameMeta = useGameStore((s) => s.gameMeta);
+  const setGameMeta = useGameStore((s) => s.setGameMeta);
   const setGameSettings = useGameStore((s) => s.setGameSettings);
 
-  useEffect(() => {
-    const init = async () => {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-      const currentUser = session?.user ?? null;
-      setUser(currentUser);
-      if (!currentUser || !gameId) return;
+  const isGM = gameMeta?.ownerId === user?.id;
+  const gameSystemId = gameMeta?.systemId ?? undefined;
+  const gameSystemSlug = gameMeta?.systemSlug ?? "dnd5e";
 
+  useEffect(() => {
+    if (!user || !gameId) return;
+    // Skip fetch entirely if we already have fresh data for this game
+    if (gameMeta?.gameId === gameId) return;
+
+    const loadGame = async () => {
       const { data, error } = await supabase
         .from("games")
         .select(
-          `
-    owner_id,
-    name,
-    default_grid_size,
-    bg_color,
-    system_id,
-    systems:systems!games_system_id_fkey(slug)
-  `,
+          `owner_id, name, default_grid_size, bg_color, system_id,
+           systems:systems!games_system_id_fkey(slug)`,
         )
         .eq("id", gameId)
         .single();
 
-      if (error || !data) {
-        console.log(error);
-        return;
-      }
+      if (error || !data) return;
 
-      setIsGM(data.owner_id === currentUser.id);
+      setGameMeta({
+        gameId,
+        ownerId: data.owner_id,
+        systemId: data.system_id ?? null,
+        systemSlug: (data.systems as any)?.[0]?.slug ?? "dnd5e",
+      });
+
       setGameSettings({
         gameName: data.name ?? "",
         defaultGridSize:
           data.default_grid_size ?? DEFAULT_GAME_SETTINGS.defaultGridSize,
         bgColor: data.bg_color ?? DEFAULT_GAME_SETTINGS.bgColor,
       });
-      setGameSystemId(data.system_id);
-      setGameSystemSlug(data.systems?.[0]?.slug ?? "dnd5e");
     };
 
-    init();
+    loadGame();
+  }, [user, gameId, gameMeta?.gameId]);
 
-    // Keep listener for token refresh / sign-out mid-session
-    const { data: listener } = supabase.auth.onAuthStateChange(
-      (_event, session) => {
-        setUser(session?.user ?? null);
-      },
-    );
-
-    return () => listener.subscription.unsubscribe();
-  }, [gameId]);
+  // Clear cache when leaving this game
   useEffect(() => {
-    const refetchSystem = async () => {
-      if (!gameId) return;
-      const { data } = await supabase
+    return () => {
+      setGameMeta(null);
+    };
+  }, [gameId]);
+
+  // ── System slug refresh — only fires if System Builder was actually used ──
+  // Replaces the old window focus listener that fired on every tab switch.
+  const systemBuilderVisited = useRef(false);
+  useEffect(() => {
+    const markBuilderVisited = () => {
+      if (document.referrer.includes("system-builder")) {
+        systemBuilderVisited.current = true;
+      }
+    };
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState !== "visible") return;
+      if (!systemBuilderVisited.current || !gameId) return;
+
+      systemBuilderVisited.current = false;
+      supabase
         .from("games")
         .select("system_id, systems:systems!games_system_id_fkey(slug)")
         .eq("id", gameId)
-        .single();
-      if (data) {
-        setGameSystemId(data.system_id ?? undefined);
-        setGameSystemSlug((data.systems as any)?.[0]?.slug ?? "dnd5e");
-      }
+        .single()
+        .then(({ data }) => {
+          if (!data || !gameMeta) return;
+          setGameMeta({
+            ...gameMeta,
+            systemId: data.system_id ?? null,
+            systemSlug: (data.systems as any)?.[0]?.slug ?? "dnd5e",
+          });
+        });
     };
-    window.addEventListener("focus", refetchSystem);
-    return () => window.removeEventListener("focus", refetchSystem);
-  }, [gameId]);
 
-  // ── Store ─────────────────────────────────────────────────────────────────────
+    window.addEventListener("focus", markBuilderVisited);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      window.removeEventListener("focus", markBuilderVisited);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [gameId, gameMeta]);
+
+  // ── Store ─────────────────────────────────────────────────────────────────
   const setMap = useGameStore((s) => s.setMap);
   const setTokens = useGameStore((s) => s.setTokens);
   const storeAddToken = useGameStore((s) => s.addToken);
@@ -139,29 +147,28 @@ export default function GameSession() {
     (window as any).__gameStore = _store;
   }, [_store]);
 
-  // ── Character sheet ───────────────────────────────────────────────────────────
+  // ── Character sheet ───────────────────────────────────────────────────────
   const {
     openSheet,
     needsPlayerPick,
     openOwn,
     openForToken,
     autoLinkSheet,
-
+    ensureSheet,
     confirmPlayerPick,
     cancelPlayerPick,
     closeSheet,
   } = useCharacterSheet(user?.id ?? "", isGM);
 
-  // ── NPC stat blocks ───────────────────────────────────────────────────────────
+  // ── NPC stat blocks ───────────────────────────────────────────────────────
   const { assignToToken } = useNpcStatBlocks(gameId ?? null);
   const [openStatBlockId, setOpenStatBlockId] = useState<string | null>(null);
   const [assigningTokenId, setAssigningTokenId] = useState<string | null>(null);
   const [assigningTokenName, setAssigningTokenName] = useState<string>("");
 
-  // ── Active scenes ─────────────────────────────────────────────────────────────
+  // ── Active scenes ─────────────────────────────────────────────────────────
   const [activeSceneId, setActiveSceneId] = useState<string | null>(null);
   const [playerSceneId, setPlayerSceneId] = useState<string | null>(null);
-
   const activeSceneIdRef = useRef<string | null>(null);
 
   const updateActiveScene = useCallback((id: string | null) => {
@@ -169,7 +176,7 @@ export default function GameSession() {
     setActiveSceneId(id);
   }, []);
 
-  // ── Fog ───────────────────────────────────────────────────────────────────────
+  // ── Fog ───────────────────────────────────────────────────────────────────
   const sendFogRef = useRef<
     ((e: import("../hooks/useFog").FogBroadcastEvent) => void) | null
   >(null);
@@ -211,7 +218,6 @@ export default function GameSession() {
 
   const { addToken: dbAddToken, moveToken: dbMoveToken } = useTokens();
 
-  // ── Scene settings ────────────────────────────────────────────────────────────
   const applySceneSettings = useCallback(
     (scene: Scene) => {
       setSceneSettings({
@@ -226,14 +232,12 @@ export default function GameSession() {
         mapWidth: scene.map_width ?? DEFAULT_SCENE_SETTINGS.mapWidth,
         mapHeight: scene.map_height ?? DEFAULT_SCENE_SETTINGS.mapHeight,
       });
-      if ((scene as any).feet_per_square) {
+      if ((scene as any).feet_per_square)
         setFeetPerSquare((scene as any).feet_per_square);
-      }
     },
     [setSceneSettings, setFeetPerSquare],
   );
 
-  // ── Load tokens for a scene ───────────────────────────────────────────────────
   const loadSceneTokens = useCallback(
     async (sceneId: string) => {
       const { data: tokenRows } = await supabase
@@ -246,9 +250,13 @@ export default function GameSession() {
     [setTokens],
   );
 
-  // ── Restore on mount ──────────────────────────────────────────────────────────
+  // ── Scene restore — guarded so it only runs once per game mount ───────────
+  const sceneRestored = useRef<string | null>(null);
   useEffect(() => {
     if (!gameId) return;
+    if (sceneRestored.current === gameId) return;
+    sceneRestored.current = gameId;
+
     const restore = async () => {
       const { data: sceneRows } = await supabase
         .from("scenes")
@@ -268,20 +276,19 @@ export default function GameSession() {
       const active = sceneRows.find((s: Scene) => s.active);
       const initialScene = active ?? sceneRows[0];
 
-      updateActiveScene(active.id);
-      setPlayerSceneId(active.id);
+      updateActiveScene(active?.id ?? initialScene.id);
+      setPlayerSceneId(active?.id ?? initialScene.id);
       setMap(
         initialScene.map_url ?? "/testmap.jpg",
         (initialScene as any).map_mime_type ?? null,
       );
       applySceneSettings(initialScene);
-
       await loadSceneTokens(initialScene.id);
     };
+
     restore();
   }, [gameId]);
 
-  // ── GM: preview scene locally ─────────────────────────────────────────────────
   const handleScenePreview = useCallback(
     async (scene: Scene) => {
       updateActiveScene(scene.id);
@@ -295,7 +302,6 @@ export default function GameSession() {
     [setMap, applySceneSettings, updateActiveScene, loadSceneTokens],
   );
 
-  // ── GM: push players to a scene ───────────────────────────────────────────────
   const handleScenePushToPlayers = useCallback(
     async (scene: Scene) => {
       await dbSetActiveScene(scene.id);
@@ -304,7 +310,6 @@ export default function GameSession() {
     [dbSetActiveScene],
   );
 
-  // ── Player: switch to new active scene (triggered by realtime) ────────────────
   const handlePlayerSceneSwitch = useCallback(
     async (scene: Scene) => {
       updateActiveScene(scene.id);
@@ -338,7 +343,6 @@ export default function GameSession() {
     );
   }, []);
 
-  // ── Realtime ──────────────────────────────────────────────────────────────────
   const {
     remoteMeasures,
     broadcastMeasure,
@@ -365,7 +369,6 @@ export default function GameSession() {
     sendFogRef.current = sendFog;
   }, [sendFog]);
 
-  // ── Walls ─────────────────────────────────────────────────────────────────────
   const sendWallRef = useRef<
     ((e: import("../hooks/useWalls").WallBroadcastEvent) => void) | null
   >(null);
@@ -383,7 +386,6 @@ export default function GameSession() {
     handleWallBroadcastRef.current = handleWallBroadcast;
   }, [handleWallBroadcast]);
 
-  // ── Save settings ─────────────────────────────────────────────────────────────
   const handleSaveSceneSettings = useCallback(
     async (settings: SceneSettings & { feetPerSquare?: number }) => {
       const sceneId = activeSceneIdRef.current;
@@ -423,7 +425,6 @@ export default function GameSession() {
     [gameId],
   );
 
-  // ── Token handlers ────────────────────────────────────────────────────────────
   const handleAddToken = useCallback(
     async (token: Token) => {
       const sceneId = activeSceneIdRef.current;
@@ -547,9 +548,10 @@ export default function GameSession() {
     const store = (window as any).__gameStore;
     if (store) {
       const { zoom, panCamera } = store.getState();
-      const W = window.innerWidth;
-      const H = window.innerHeight;
-      panCamera(W / 2 - token.x * zoom, H / 2 - token.y * zoom);
+      panCamera(
+        window.innerWidth / 2 - token.x * zoom,
+        window.innerHeight / 2 - token.y * zoom,
+      );
     }
   }, []);
 
@@ -568,7 +570,6 @@ export default function GameSession() {
     [sendPing, isGM, presenceUsers, user?.id],
   );
 
-  // ── Sheet handlers ────────────────────────────────────────────────────────────
   const handleOpenSheet = useCallback(
     (tokenId: string) => {
       if (gameId) openForToken(tokenId, gameId);
@@ -577,10 +578,9 @@ export default function GameSession() {
   );
 
   const handleOpenOwnSheet = useCallback(() => {
-    if (gameId) openOwn(gameId, gameSystemId);
+    if (gameId) openOwn(gameId);
   }, [gameId, gameSystemId, openOwn]);
 
-  // ── NPC stat block handlers ───────────────────────────────────────────────────
   const handleOpenStatBlock = useCallback((tokenId: string) => {
     const tokens = (window as any).__gameStoreTokens ?? [];
     const token = tokens.find((t: any) => t.id === tokenId);
@@ -611,39 +611,19 @@ export default function GameSession() {
     [assigningTokenId, assignToToken, storeUpdateToken],
   );
 
-  // ── Auto-create sheet for players on first load ───────────────────────────────
-  const sheetCheckDone = useRef(false);
+  const sheetEnsured = useRef(false);
   useEffect(() => {
-    if (!gameId || !user || isGM) return;
-    if (!gameSystemId || !gameSystemSlug) return;
+    if (!gameId || !user || sheetEnsured.current) return;
+    sheetEnsured.current = true;
+    ensureSheet(gameId);
+  }, [gameId, user, ensureSheet]);
 
-    if (sheetCheckDone.current) return;
-    sheetCheckDone.current = true;
-    supabase
-      .from("character_sheets")
-      .select("id")
-      .eq("game_id", gameId)
-      .eq("user_id", user.id)
-      .maybeSingle()
-      .then(async ({ data }) => {
-        if (!data) {
-          await supabase.rpc("get_or_create_sheet", {
-            p_game_id: gameId,
-            p_user_id: user.id,
-            p_system_slug: gameSystemSlug || "dnd5e",
-          });
-        }
-      });
-  }, [gameId, user, isGM, gameSystemId, openOwn]);
-
-  // ── UI state ──────────────────────────────────────────────────────────────────
   const [activeTool, setActiveTool] = useState<ActiveTool>("select");
   const [gmPanelOpen, setGmPanelOpen] = useState(false);
   const [diceOpen, setDiceOpen] = useState(false);
   const navigate = useNavigate();
   const [confirming, setConfirming] = useState(false);
 
-  // ── Loading ───────────────────────────────────────────────────────────────────
   if (!user || !gameId) {
     return (
       <div className="flex h-screen w-screen items-center justify-center bg-[#0d0d14]">
@@ -660,12 +640,26 @@ export default function GameSession() {
   const handleExitClick = () => {
     if (!confirming) {
       setConfirming(true);
-      // Auto-cancel after 3 s so it doesn't stay open forever
       setTimeout(() => setConfirming(false), 3000);
       return;
     }
     navigate(`/game/${gameId}`);
   };
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "s") {
+        setActiveTool("select");
+      } else if (e.key === "p") {
+        setActiveTool("pan");
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, []);
 
   return (
     <div
@@ -677,12 +671,11 @@ export default function GameSession() {
           onClick={handleExitClick}
           onBlur={() => setTimeout(() => setConfirming(false), 150)}
           className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-semibold transition-all duration-150 shadow-lg backdrop-blur-sm
-          ${
-            confirming
-              ? "bg-red-500/20 border-red-500/50 text-red-400 hover:bg-red-500/30"
-              : "bg-black/40 border-white/10 text-white/40 hover:text-white/70 hover:border-white/20 hover:bg-black/60"
-          }`}
-          title={isGM ? "Leave game" : "Leave game"}
+            ${
+              confirming
+                ? "bg-red-500/20 border-red-500/50 text-red-400 hover:bg-red-500/30"
+                : "bg-black/40 border-white/10 text-white/40 hover:text-white/70 hover:border-white/20 hover:bg-black/60"
+            }`}
         >
           <span className="text-sm leading-none">{confirming ? "" : "⬡"}</span>
           {confirming ? "Confirm exit?" : "Exit"}
@@ -779,7 +772,7 @@ export default function GameSession() {
       {needsPlayerPick && (
         <PlayerPickerModal
           gameId={gameId!}
-          onConfirm={confirmPlayerPick}
+          onConfirm={(userId) => confirmPlayerPick(userId, storeUpdateToken)}
           onCancel={cancelPlayerPick}
         />
       )}

@@ -6,6 +6,8 @@ import HomePage from "./pages/Homepage";
 import Dashboard from "./pages/Dashboard";
 import Login from "./pages/Login";
 import Signup from "./pages/Signup";
+import ForgotPassword from "./pages/ForgotPassword";
+import ResetPassword from "./pages/ResetPassword";
 import ProtectedRoute from "./routes";
 import "./index.css";
 import GameLobby from "./pages/GameLobby";
@@ -90,6 +92,10 @@ const router = createBrowserRouter([
       },
       { path: "login", element: <Login /> },
       { path: "signup", element: <Signup /> },
+      { path: "forgot-password", element: <ForgotPassword /> },
+      // reset-password must be public — Supabase redirects here with a token
+      // before the user has a valid session, so ProtectedRoute would block it.
+      { path: "reset-password", element: <ResetPassword /> },
     ],
   },
 ]);

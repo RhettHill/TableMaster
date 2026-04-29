@@ -627,6 +627,7 @@ export default function Tabletop({
                   }
                   onDeleteTokens={onDeleteTokens}
                   onSelectionChange={setSelectedTokenIds}
+                  currentUserId={currentUserId}
                 />
                 <PingLayer pings={pings} />
               </Group>
@@ -711,6 +712,7 @@ export default function Tabletop({
           onAssignStatBlock={isGM ? onAssignStatBlock : undefined}
           hasStatBlock={!!(contextMenu?.token as any)?.npc_stat_block_id}
           onClose={() => setContextMenu(null)}
+          currentUserId={currentUserId}
         />
       )}
 

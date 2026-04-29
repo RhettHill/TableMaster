@@ -120,7 +120,6 @@ function FieldView({
 
 export default function GenericStatBlockPanel({
   statBlockId,
-  gameId,
   isGM,
   onClose,
 }: Props) {

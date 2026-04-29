@@ -6,6 +6,7 @@ import {
   deleteGameAssets,
 } from "../services/r2Storage";
 import { useNavigate } from "react-router-dom";
+import { useAuthStore } from "../store/AuthStore";
 
 interface Game {
   id: string;
@@ -52,13 +53,10 @@ function accent(name: string) {
   return ACCENTS[name.charCodeAt(0) % ACCENTS.length];
 }
 
-// ── Storage bar ───────────────────────────────────────────────────────────────
-
 function StorageBar({ used, limit }: { used: number; limit: number }) {
   const pct = limit > 0 ? Math.min(100, (used / limit) * 100) : 0;
   const isWarning = pct >= 80;
   const isFull = pct >= 100;
-
   return (
     <div className="flex flex-col gap-1.5">
       <div className="flex items-center justify-between">
@@ -66,34 +64,20 @@ function StorageBar({ used, limit }: { used: number; limit: number }) {
           Storage
         </span>
         <span
-          className={`text-[10px] tabular-nums font-mono ${
-            isFull
-              ? "text-red-400"
-              : isWarning
-                ? "text-amber-400"
-                : "text-white/30"
-          }`}
+          className={`text-[10px] tabular-nums font-mono ${isFull ? "text-red-400" : isWarning ? "text-amber-400" : "text-white/30"}`}
         >
           {formatBytes(used)} / {formatBytes(limit)}
         </span>
       </div>
       <div className="h-1 w-full rounded-full bg-white/8 overflow-hidden">
         <div
-          className={`h-full rounded-full transition-all duration-500 ${
-            isFull
-              ? "bg-red-500"
-              : isWarning
-                ? "bg-amber-500"
-                : "bg-amber-600/60"
-          }`}
+          className={`h-full rounded-full transition-all duration-500 ${isFull ? "bg-red-500" : isWarning ? "bg-amber-500" : "bg-amber-600/60"}`}
           style={{ width: `${pct}%` }}
         />
       </div>
     </div>
   );
 }
-
-// ── Campaign limit banner ─────────────────────────────────────────────────────
 
 function LimitBanner({ onUpgrade }: { onUpgrade: () => void }) {
   return (
@@ -110,17 +94,13 @@ function LimitBanner({ onUpgrade }: { onUpgrade: () => void }) {
       </div>
       <button
         onClick={onUpgrade}
-        className="flex-shrink-0 px-3 py-1.5 rounded-lg text-xs font-semibold
-          bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/30
-          text-amber-400 transition-all whitespace-nowrap"
+        className="flex-shrink-0 px-3 py-1.5 rounded-lg text-xs font-semibold bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/30 text-amber-400 transition-all whitespace-nowrap"
       >
         Upgrade →
       </button>
     </div>
   );
 }
-
-// ── Game card ─────────────────────────────────────────────────────────────────
 
 function GameCard({
   game,
@@ -147,7 +127,6 @@ function GameCard({
       onClick={onOpen}
       className="group relative rounded-2xl border border-white/8 bg-white/[0.02] hover:bg-white/[0.05] hover:border-white/15 transition-all duration-200 cursor-pointer overflow-hidden flex flex-col"
     >
-      {/* ── Coloured header band with icon ── */}
       <div
         className="relative h-20 flex-shrink-0 flex items-end px-5 pb-3 gap-3"
         style={{
@@ -158,7 +137,6 @@ function GameCard({
           className="absolute top-0 left-0 right-0 h-0.5"
           style={{ background: color }}
         />
-
         <div
           className="relative flex-shrink-0 w-11 h-11 rounded-xl overflow-hidden border border-white/10 shadow-lg"
           onClick={(e) => {
@@ -192,7 +170,6 @@ function GameCard({
             onChange={onIconUpload}
           />
         )}
-
         <div className="absolute top-3 right-3 flex items-center gap-2">
           {game.isOwner && onDelete && (
             <button
@@ -203,18 +180,12 @@ function GameCard({
             </button>
           )}
           <span
-            className={`text-[10px] px-2 py-0.5 rounded-full font-semibold border backdrop-blur-sm ${
-              game.isOwner
-                ? "bg-amber-500/20 border-amber-500/40 text-amber-400"
-                : "bg-sky-500/20 border-sky-500/40 text-sky-400"
-            }`}
+            className={`text-[10px] px-2 py-0.5 rounded-full font-semibold border backdrop-blur-sm ${game.isOwner ? "bg-amber-500/20 border-amber-500/40 text-amber-400" : "bg-sky-500/20 border-sky-500/40 text-sky-400"}`}
           >
             {game.isOwner ? "GM" : "Player"}
           </span>
         </div>
       </div>
-
-      {/* ── Body ── */}
       <div className="flex flex-col gap-2 px-5 py-4 flex-1">
         <h3
           className="text-white/90 font-bold text-base leading-snug line-clamp-2"
@@ -226,8 +197,6 @@ function GameCard({
           {game.isOwner ? "Created" : "Joined"} {timeAgo(game.created_at)}
         </p>
       </div>
-
-      {/* ── Footer ── */}
       <div className="px-5 py-3 border-t border-white/6 flex items-center justify-between">
         <span className="text-[11px] text-stone-600 group-hover:text-stone-400 transition-colors">
           Open campaign
@@ -244,9 +213,10 @@ function GameCard({
   );
 }
 
-// ── Main ──────────────────────────────────────────────────────────────────────
-
 export default function Dashboard() {
+  // ── Read user from store — no auth network call needed ──────────────────
+  const user = useAuthStore((s) => s.user);
+
   const [games, setGames] = useState<Game[]>([]);
   const [newGameName, setNewGameName] = useState("");
   const [loading, setLoading] = useState(true);
@@ -263,15 +233,10 @@ export default function Dashboard() {
   const [selectedSystemId, setSelectedSystemId] = useState<string>("");
 
   useEffect(() => {
-    const init = async () => {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      if (!user) {
-        navigate("/home");
-        return;
-      }
+    if (!user) return;
 
+    const init = async () => {
+      // ── Single batch: all 4 queries in parallel, no auth call ───────────
       const [
         { data: systemRows },
         { data: profile },
@@ -300,7 +265,6 @@ export default function Dashboard() {
           .select("game_id, games(id, name, created_at, icon_url)")
           .eq("user_id", user.id),
       ]);
-      console.log(user.id);
 
       setSystems(systemRows ?? []);
       if (systemRows && systemRows.length > 0)
@@ -314,7 +278,6 @@ export default function Dashboard() {
             "",
         );
         setAvatarUrl(profile.avatar_url ?? null);
-
         const plan = profile.plans as any;
         if (plan) {
           setPlanLimits({
@@ -340,10 +303,10 @@ export default function Dashboard() {
       setGames([...owned, ...joined]);
       setLoading(false);
     };
-    init();
-  }, []);
 
-  // How many campaigns this user owns (not joined as player)
+    init();
+  }, [user]);
+
   const ownedCount = games.filter((g) => g.isOwner).length;
   const atCampaignLimit =
     planLimits !== null &&
@@ -351,14 +314,13 @@ export default function Dashboard() {
     ownedCount >= planLimits.maxCampaigns;
 
   const createGame = async () => {
-    // Client-side guard — the DB trigger is the real enforcement
+    if (!user) return;
     if (atCampaignLimit) {
       setError(
         `Free accounts can only create ${planLimits!.maxCampaigns} campaigns. Upgrade to create more.`,
       );
       return;
     }
-
     const name = newGameName.trim();
     if (!name) {
       setError("Enter a campaign name first.");
@@ -368,11 +330,6 @@ export default function Dashboard() {
     setCreating(true);
     setError("");
 
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) return;
-
     const { data, error: err } = await supabase
       .from("games")
       .insert([
@@ -381,21 +338,18 @@ export default function Dashboard() {
       .select("id, name, created_at, icon_url");
 
     if (err) {
-      // Surface the trigger error message cleanly
-      if (err.message?.includes("Campaign limit reached")) {
-        setError(`You've reached your campaign limit. Upgrade to create more.`);
-      } else {
-        setError(err.message);
-      }
+      setError(
+        err.message?.includes("Campaign limit reached")
+          ? "You've reached your campaign limit. Upgrade to create more."
+          : err.message,
+      );
       setCreating(false);
       return;
     }
 
     if (data) {
-      const newGame = { ...data[0], isOwner: true };
-      setGames((prev) => [newGame, ...prev]);
+      setGames((prev) => [{ ...data[0], isOwner: true }, ...prev]);
       setNewGameName("");
-      // Update local owned count so the limit banner appears immediately
       navigate(`/game/${data[0].id}`);
     }
     setCreating(false);
@@ -405,14 +359,8 @@ export default function Dashboard() {
     e.stopPropagation();
     if (!confirm("Permanently delete this campaign and all its assets?"))
       return;
-
-    // 1. Delete all R2 objects for this game first
-    //    (non-shared assets only — shared assets stay in the library)
     await deleteGameAssets(id);
-
-    // 2. Delete the game row — cascades to scenes, tokens, assets, fog, walls etc.
     await supabase.from("games").delete().eq("id", id);
-
     setGames((prev) => prev.filter((g) => g.id !== id));
   };
 
@@ -423,25 +371,22 @@ export default function Dashboard() {
     const file = e.target.files?.[0];
     e.target.value = "";
     if (!file) return;
-    let publicUrl: string;
     try {
-      const result = await uploadFile(file, gameId);
-      publicUrl = result.publicUrl;
+      const { publicUrl } = await uploadFile(file, gameId);
+      await supabase
+        .from("games")
+        .update({ icon_url: publicUrl })
+        .eq("id", gameId);
+      setGames((prev) =>
+        prev.map((g) => (g.id === gameId ? { ...g, icon_url: publicUrl } : g)),
+      );
     } catch (err: any) {
-      if (err instanceof StorageQuotaError) {
-        alert(`Upload failed: ${err.message} (Plan: ${err.detail.plan})`);
-      } else {
-        alert("Upload failed: " + err.message);
-      }
-      return;
+      alert(
+        err instanceof StorageQuotaError
+          ? `Upload failed: ${err.message} (Plan: ${err.detail.plan})`
+          : "Upload failed: " + err.message,
+      );
     }
-    await supabase
-      .from("games")
-      .update({ icon_url: publicUrl })
-      .eq("id", gameId);
-    setGames((prev) =>
-      prev.map((g) => (g.id === gameId ? { ...g, icon_url: publicUrl } : g)),
-    );
   };
 
   const logout = async () => {
@@ -461,13 +406,11 @@ export default function Dashboard() {
       <div
         className="fixed inset-0 pointer-events-none opacity-[0.025]"
         style={{
-          backgroundImage: `linear-gradient(rgba(255,255,255,0.8) 1px, transparent 1px),
-                            linear-gradient(90deg, rgba(255,255,255,0.8) 1px, transparent 1px)`,
+          backgroundImage: `linear-gradient(rgba(255,255,255,0.8) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.8) 1px, transparent 1px)`,
           backgroundSize: "60px 60px",
         }}
       />
 
-      {/* Nav */}
       <nav className="relative z-50 border-b border-white/6 bg-[#0a0a0f]/80 backdrop-blur-sm sticky top-0">
         <div className="max-w-6xl mx-auto px-6 h-14 flex items-center justify-between">
           <div className="flex items-center gap-2.5">
@@ -475,7 +418,7 @@ export default function Dashboard() {
               onClick={() => navigate("/")}
               className="text-white font-bold tracking-wide flex items-center gap-2.5"
             >
-              <span className="text-amber-500">⚔</span>
+              <img src="/swords.png" height={16} width={16} />
               TableMaster
             </button>
             <button
@@ -491,7 +434,6 @@ export default function Dashboard() {
               Plans
             </button>
           </div>
-
           <div className="flex items-center gap-3">
             {userName && (
               <button
@@ -525,7 +467,6 @@ export default function Dashboard() {
       </nav>
 
       <div className="relative z-10 max-w-6xl mx-auto px-6">
-        {/* Hero */}
         <div className="py-12 border-b border-white/6">
           <div className="flex flex-col md:flex-row md:items-end justify-between gap-8">
             <div>
@@ -539,8 +480,6 @@ export default function Dashboard() {
                 Manage your tabletop adventures or join a game your GM has
                 invited you to.
               </p>
-
-              {/* Plan info + storage bar */}
               {planLimits && (
                 <div className="mt-5 flex flex-col gap-2 max-w-xs">
                   <div className="flex items-center gap-2">
@@ -560,7 +499,6 @@ export default function Dashboard() {
                     used={planLimits.storageUsed}
                     limit={planLimits.storageLimit}
                   />
-                  {/* Campaign count for free users */}
                   {!planLimits.isPaid && (
                     <p
                       className={`text-[10px] ${atCampaignLimit ? "text-amber-400" : "text-white/25"}`}
@@ -571,10 +509,7 @@ export default function Dashboard() {
                 </div>
               )}
             </div>
-
-            {/* Create campaign panel */}
             <div className="flex flex-col gap-2 min-w-72">
-              {/* Limit banner replaces the form when at limit */}
               {atCampaignLimit ? (
                 <LimitBanner onUpgrade={() => navigate("/plans")} />
               ) : (
@@ -602,14 +537,10 @@ export default function Dashboard() {
                   {systems.length > 0 && (
                     <div className="flex items-center gap-2">
                       <span className="text-stone-500 text-xs">System:</span>
-
                       <select
                         value={selectedSystemId}
                         onChange={(e) => setSelectedSystemId(e.target.value)}
-                        className="bg-white/5 border border-white/10 focus:border-amber-500/50 
-                 rounded-lg px-3 py-1.5 text-xs text-white 
-                 focus:outline-none focus:ring-2 focus:ring-amber-500/15 
-                 transition-all"
+                        className="bg-white/5 border border-white/10 focus:border-amber-500/50 rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none focus:ring-2 focus:ring-amber-500/15 transition-all"
                       >
                         {systems.map((s) => (
                           <option
@@ -625,13 +556,11 @@ export default function Dashboard() {
                   )}
                 </>
               )}
-
               {error && <p className="text-red-400 text-xs px-1">{error}</p>}
             </div>
           </div>
         </div>
 
-        {/* Games grid */}
         <div className="py-8">
           {games.length > 0 && (
             <div className="flex items-center justify-between mb-6">
@@ -649,7 +578,6 @@ export default function Dashboard() {
               )}
             </div>
           )}
-
           {loading ? (
             <div className="flex items-center justify-center h-48 gap-3">
               <div className="w-5 h-5 border-2 border-amber-500/30 border-t-amber-500 rounded-full animate-spin" />

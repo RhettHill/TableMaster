@@ -34,6 +34,7 @@ function GridBg() {
 export default function Signup() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [username, setUsername] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [error, setError] = useState("");
@@ -44,6 +45,7 @@ export default function Signup() {
   const handleSignup = async () => {
     setError("");
     setMessage("");
+
     if (!email || !password || !username) {
       setError("Email, password and username are required.");
       return;
@@ -56,13 +58,20 @@ export default function Signup() {
       setError("Password must be at least 6 characters.");
       return;
     }
+    if (password !== confirmPassword) {
+      setError("Passwords do not match.");
+      return;
+    }
 
     setLoading(true);
+
+    const cleanUsername = username.toLowerCase().trim();
+    const cleanDisplayName = displayName.trim() || username.trim();
 
     const { data: existing } = await supabase
       .from("profiles")
       .select("id")
-      .eq("username", username.toLowerCase().trim())
+      .eq("username", cleanUsername)
       .maybeSingle();
 
     if (existing) {
@@ -71,39 +80,56 @@ export default function Signup() {
       return;
     }
 
+    // Pass username + display_name as metadata so the handle_new_user
+    // SECURITY DEFINER trigger can insert the profile row, bypassing RLS.
     const { data: userData, error: signUpError } = await supabase.auth.signUp({
       email,
       password,
+      options: {
+        data: {
+          username: cleanUsername,
+          display_name: cleanDisplayName,
+        },
+      },
     });
+
     if (signUpError) {
       setError(signUpError.message);
       setLoading(false);
       return;
     }
 
-    if (userData.user) {
-      const { error: profileError } = await supabase.from("profiles").insert([
-        {
-          id: userData.user.id,
-          username: username.toLowerCase().trim(),
-          display_name: displayName.trim() || username.trim(),
-        },
-      ]);
-      if (profileError) {
-        setError("Account created but profile setup failed.");
-      } else {
-        setMessage(
-          "Account created! Check your email to confirm, then sign in.",
-        );
-        setTimeout(() => navigate("/login"), 3000);
-      }
+    if (!userData.user) {
+      setError("Account creation failed. Please try again.");
+      setLoading(false);
+      return;
     }
+
+    const session = userData.session;
+
+    if (session?.access_token) {
+      // Email confirmation is OFF — session is live immediately.
+      await supabase.auth.setSession({
+        access_token: session.access_token,
+        refresh_token: session.refresh_token,
+      });
+      setMessage("Account created! Taking you to your campaigns…");
+      setTimeout(() => navigate("/"), 1500);
+    } else {
+      // Email confirmation is ON — user must confirm before signing in.
+      setMessage("Account created! Check your email to confirm, then sign in.");
+      setTimeout(() => navigate("/login"), 3000);
+    }
+
     setLoading(false);
   };
 
   const handleKey = (e: React.KeyboardEvent) => {
     if (e.key === "Enter") handleSignup();
   };
+
+  const passwordMismatch =
+    confirmPassword.length > 0 && password !== confirmPassword;
 
   return (
     <div
@@ -113,7 +139,6 @@ export default function Signup() {
       <GridBg />
 
       <div className="relative z-10 w-full max-w-sm">
-        {/* Logo */}
         <div className="flex flex-col items-center mb-8">
           <span className="text-amber-500 text-3xl mb-3">⚔</span>
           <h1 className="text-white font-bold text-2xl tracking-wide">
@@ -122,48 +147,77 @@ export default function Signup() {
           <p className="text-stone-500 text-sm mt-1">Begin your adventure</p>
         </div>
 
-        {/* Card */}
         <div className="rounded-2xl border border-white/8 bg-white/3 backdrop-blur-sm p-8">
           <div className="flex flex-col gap-4">
-            {[
-              {
-                label: "Email",
-                value: email,
-                set: setEmail,
-                type: "email",
-                placeholder: "name@example.com",
-                auto: "email",
-              },
-              {
-                label: "Password",
-                value: password,
-                set: setPassword,
-                type: "password",
-                placeholder: "Min 6 characters",
-                auto: "new-password",
-              },
-            ].map(({ label, value, set, type, placeholder, auto }) => (
-              <div key={label} className="flex flex-col gap-1.5">
-                <label className="text-xs font-semibold text-stone-400 uppercase tracking-wider">
-                  {label}
-                </label>
-                <input
-                  type={type}
-                  value={value}
-                  onChange={(e) => {
-                    set(e.target.value);
-                    setError("");
-                  }}
-                  onKeyDown={handleKey}
-                  autoComplete={auto}
-                  placeholder={placeholder}
-                  className="w-full bg-white/5 border border-white/10 focus:border-amber-500/60 rounded-xl px-4 py-3 text-sm text-white placeholder-stone-600 focus:outline-none focus:ring-2 focus:ring-amber-500/15 transition-all"
-                />
-              </div>
-            ))}
+            {/* Email */}
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs font-semibold text-stone-400 uppercase tracking-wider">
+                Email
+              </label>
+              <input
+                type="email"
+                value={email}
+                onChange={(e) => {
+                  setEmail(e.target.value);
+                  setError("");
+                }}
+                onKeyDown={handleKey}
+                autoComplete="email"
+                placeholder="name@example.com"
+                className="w-full bg-white/5 border border-white/10 focus:border-amber-500/60 rounded-xl px-4 py-3 text-sm text-white placeholder-stone-600 focus:outline-none focus:ring-2 focus:ring-amber-500/15 transition-all"
+              />
+            </div>
+
+            {/* Password */}
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs font-semibold text-stone-400 uppercase tracking-wider">
+                Password
+              </label>
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => {
+                  setPassword(e.target.value);
+                  setError("");
+                }}
+                onKeyDown={handleKey}
+                autoComplete="new-password"
+                placeholder="Min 6 characters"
+                className="w-full bg-white/5 border border-white/10 focus:border-amber-500/60 rounded-xl px-4 py-3 text-sm text-white placeholder-stone-600 focus:outline-none focus:ring-2 focus:ring-amber-500/15 transition-all"
+              />
+            </div>
+
+            {/* Confirm Password */}
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs font-semibold text-stone-400 uppercase tracking-wider">
+                Confirm Password
+              </label>
+              <input
+                type="password"
+                value={confirmPassword}
+                onChange={(e) => {
+                  setConfirmPassword(e.target.value);
+                  setError("");
+                }}
+                onKeyDown={handleKey}
+                autoComplete="new-password"
+                placeholder="Repeat your password"
+                className={`w-full bg-white/5 border focus:outline-none focus:ring-2 rounded-xl px-4 py-3 text-sm text-white placeholder-stone-600 transition-all ${
+                  passwordMismatch
+                    ? "border-red-500/50 focus:border-red-500/70 focus:ring-red-500/10"
+                    : "border-white/10 focus:border-amber-500/60 focus:ring-amber-500/15"
+                }`}
+              />
+              {passwordMismatch && (
+                <p className="text-red-400 text-[11px] px-1">
+                  Passwords don't match
+                </p>
+              )}
+            </div>
 
             <div className="h-px bg-white/6" />
 
+            {/* Username */}
             <div className="flex flex-col gap-1.5">
               <label className="text-xs font-semibold text-stone-400 uppercase tracking-wider">
                 Username
@@ -191,6 +245,7 @@ export default function Signup() {
               </p>
             </div>
 
+            {/* Display Name */}
             <div className="flex flex-col gap-1.5">
               <label className="text-xs font-semibold text-stone-400 uppercase tracking-wider">
                 Display Name{" "}
@@ -238,7 +293,7 @@ export default function Signup() {
             Sign in
           </Link>
         </p>
-        <p className="text-center mt-3">
+        <p className="text=center mt-3">
           <button
             onClick={() => navigate("/home")}
             className="text-stone-600 hover:text-stone-400 text-xs transition-colors"

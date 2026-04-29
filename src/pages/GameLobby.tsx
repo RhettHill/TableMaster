@@ -1,7 +1,10 @@
 import { useParams, useNavigate } from "react-router-dom";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { supabase } from "../services/supabase";
 import { useGameMembers, type GameMember } from "../hooks/useGameMembers";
+import { useAuthStore } from "../store/AuthStore";
+import CharacterSheet from "../components/sheets/CharacterSheet";
+import { useCharacterSheet } from "../hooks/useCharacterSheet";
 
 interface Game {
   id: string;
@@ -23,6 +26,16 @@ interface Scene {
   grid_size: number;
 }
 
+interface SheetEntry {
+  id: string;
+  user_id: string;
+  displayName: string;
+  avatarUrl: string | null;
+  characterName: string;
+  systemName: string;
+  systemSlug: string;
+}
+
 const ACCENTS = [
   "#7c3aed",
   "#b45309",
@@ -35,7 +48,7 @@ function accentColor(name: string) {
   return ACCENTS[name.charCodeAt(0) % ACCENTS.length];
 }
 
-// ── Sub-components ────────────────────────────────────────────────────────────
+// ── SceneCard ─────────────────────────────────────────────────────────────────
 
 function SceneCard({ scene }: { scene: Scene }) {
   const mime = (scene as any).map_mime_type as string | undefined;
@@ -43,32 +56,27 @@ function SceneCard({ scene }: { scene: Scene }) {
   const isGif = mime === "image/gif";
   const isAnimated = isVideo || isGif || !!(scene as any).map_is_animated;
 
-  const renderThumbnail = () => {
-    if (!scene.map_url) {
-      return <span className="text-stone-600 text-lg">🗺</span>;
-    }
-    if (isVideo) {
-      return (
-        <video
-          src={scene.map_url}
-          className="w-full h-full object-cover"
-          autoPlay
-          loop
-          muted
-          playsInline
-        />
-      );
-    }
-    // GIF or static image — <img> handles both
-    return (
-      <img src={scene.map_url} alt="" className="w-full h-full object-cover" />
-    );
-  };
-
   return (
     <div className="flex items-center gap-4 p-4 rounded-xl border border-white/8 bg-white/[0.02] hover:bg-white/[0.04] transition-colors">
       <div className="w-12 h-12 rounded-lg overflow-hidden flex-shrink-0 bg-white/5 border border-white/8 flex items-center justify-center relative">
-        {renderThumbnail()}
+        {!scene.map_url ? (
+          <span className="text-stone-600 text-lg">🗺</span>
+        ) : isVideo ? (
+          <video
+            src={scene.map_url}
+            className="w-full h-full object-cover"
+            autoPlay
+            loop
+            muted
+            playsInline
+          />
+        ) : (
+          <img
+            src={scene.map_url}
+            alt=""
+            className="w-full h-full object-cover"
+          />
+        )}
         {isAnimated && scene.map_url && (
           <span className="absolute bottom-0.5 right-0.5 text-[8px] font-bold bg-amber-500/80 text-white px-0.5 rounded leading-tight">
             {isVideo ? "VID" : "GIF"}
@@ -95,6 +103,8 @@ function SceneCard({ scene }: { scene: Scene }) {
   );
 }
 
+// ── StatBox ───────────────────────────────────────────────────────────────────
+
 function StatBox({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-xl border border-white/8 bg-white/[0.02] p-4 text-center">
@@ -103,6 +113,8 @@ function StatBox({ label, value }: { label: string; value: string }) {
     </div>
   );
 }
+
+// ── MemberRow ─────────────────────────────────────────────────────────────────
 
 function MemberRow({
   member,
@@ -165,6 +177,8 @@ function MemberRow({
   );
 }
 
+// ── InvitePanel ───────────────────────────────────────────────────────────────
+
 function InvitePanel({ inviteCode }: { inviteCode: string }) {
   const [copied, setCopied] = useState(false);
   const inviteUrl = `${window.location.origin}/invite/${inviteCode}`;
@@ -202,33 +216,220 @@ function InvitePanel({ inviteCode }: { inviteCode: string }) {
   );
 }
 
+// ── SheetCard ─────────────────────────────────────────────────────────────────
+
+interface SheetEntry {
+  id: string;
+  user_id: string;
+  displayName: string;
+  avatarUrl: string | null;
+  characterName: string;
+  systemName: string;
+}
+
+function SheetCard({
+  sheet,
+  isOwn,
+  isGM,
+  onOpen,
+}: {
+  sheet: SheetEntry;
+  isOwn: boolean;
+  isGM: boolean;
+  onOpen: () => void;
+}) {
+  const canEdit = isGM || isOwn;
+  return (
+    <button
+      onClick={onOpen}
+      className="group w-full flex items-center gap-3 px-4 py-3 rounded-xl border border-white/8 bg-white/[0.02] hover:bg-white/[0.05] hover:border-amber-500/20 transition-all text-left"
+    >
+      <div className="w-9 h-9 rounded-full overflow-hidden flex-shrink-0 bg-amber-600/20 border border-amber-500/20 flex items-center justify-center">
+        {sheet.avatarUrl ? (
+          <img
+            src={sheet.avatarUrl}
+            alt=""
+            className="w-full h-full object-cover"
+          />
+        ) : (
+          <span className="text-amber-400 text-sm font-bold">
+            {sheet.displayName.charAt(0).toUpperCase()}
+          </span>
+        )}
+      </div>
+
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-white/85 text-sm font-medium truncate">
+            {sheet.characterName || "Unnamed Character"}
+          </span>
+          {isOwn && (
+            <span className="text-[10px] text-sky-400/70 bg-sky-500/10 border border-sky-500/20 px-1.5 py-0.5 rounded">
+              You
+            </span>
+          )}
+        </div>
+        <p className="text-stone-500 text-xs">
+          {sheet.displayName} · {sheet.systemName}
+        </p>
+      </div>
+
+      <span
+        className={`text-[10px] flex-shrink-0 transition-colors ${canEdit ? "text-amber-400/50 group-hover:text-amber-400" : "text-white/20 group-hover:text-white/50"}`}
+      >
+        {canEdit ? "Edit →" : "View →"}
+      </span>
+    </button>
+  );
+}
+
+export function CharacterSheetsPanel({
+  gameId,
+  currentUserId,
+  isGM,
+  ownerId, // game owner — exclude from sheets list
+  members,
+}: {
+  gameId: string;
+  currentUserId: string;
+  isGM: boolean;
+  ownerId: string;
+  members: GameMember[];
+}) {
+  const [sheets, setSheets] = useState<SheetEntry[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const { openSheet, openSheetById, closeSheet } = useCharacterSheet(
+    currentUserId,
+    isGM,
+  );
+
+  // Build userId → profile map
+  const memberMap = Object.fromEntries(
+    members.map((m) => [
+      m.user_id,
+      {
+        displayName: m.profile.display_name || m.profile.username || "Player",
+        avatarUrl: m.profile.avatar_url ?? null,
+      },
+    ]),
+  );
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    const { data } = await supabase
+      .from("character_sheets")
+      .select(
+        "id, user_id, data, systems:systems!character_sheets_system_id_fkey(name, slug)",
+      )
+      .eq("game_id", gameId)
+      .order("created_at", { ascending: true });
+
+    if (!data) {
+      setLoading(false);
+      return;
+    }
+
+    const entries: SheetEntry[] = data
+      .filter((row: any) => row.user_id !== ownerId)
+      .map((row: any) => {
+        const sys = Array.isArray(row.systems) ? row.systems[0] : row.systems;
+        const member = memberMap[row.user_id];
+        return {
+          id: row.id,
+          user_id: row.user_id,
+          displayName: member?.displayName ?? "Unknown player",
+          avatarUrl: member?.avatarUrl ?? null,
+          characterName: row.data?.characterName || row.data?.name || "",
+          systemName: sys?.name ?? "Unknown system",
+          systemSlug: sys.slug,
+        };
+      });
+
+    setSheets(entries);
+    setLoading(false);
+  }, [gameId, ownerId, members]);
+
+  useEffect(() => {
+    if (members.length > 0) load();
+  }, [load, members.length]);
+
+  if (loading) {
+    return (
+      <div className="flex items-center gap-2 text-stone-500 text-sm py-4">
+        <div className="w-4 h-4 border-2 border-amber-500/20 border-t-amber-500 rounded-full animate-spin" />
+        Loading…
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <p className="text-[10px] text-white/25 mb-3">
+        {isGM
+          ? "Click any sheet to view or edit it."
+          : "Click your sheet to edit it, or view other players' sheets."}
+      </p>
+
+      <div className="flex flex-col gap-2">
+        {sheets.length === 0 ? (
+          <div className="flex items-center justify-center h-24 border border-dashed border-white/8 rounded-xl">
+            <span className="text-stone-600 text-xs text-center px-4">
+              No sheets yet — players create them when they first open the game
+            </span>
+          </div>
+        ) : (
+          sheets.map((sheet) => (
+            <SheetCard
+              key={sheet.id}
+              sheet={sheet}
+              isOwn={sheet.user_id === currentUserId}
+              isGM={isGM}
+              onOpen={() => openSheetById(sheet.id, gameId, sheet.user_id)}
+            />
+          ))
+        )}
+      </div>
+
+      {openSheet && (
+        <CharacterSheet
+          key={openSheet.sheetId}
+          sheetId={openSheet.sheetId}
+          tokenId={null}
+          gameId={gameId}
+          userId={openSheet.userId}
+          isGM={isGM}
+          canEdit={openSheet.canEdit}
+          onClose={closeSheet}
+        />
+      )}
+    </>
+  );
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 export default function GameLobby() {
   const { gameId } = useParams();
   const navigate = useNavigate();
 
+  const user = useAuthStore((s) => s.user);
+
   const [game, setGame] = useState<Game | null>(null);
   const [scenes, setScenes] = useState<Scene[]>([]);
   const [loading, setLoading] = useState(true);
   const [isOwner, setIsOwner] = useState(false);
-  const [currentUserId, setCurrentUserId] = useState<string>("");
 
   const {
     members,
     loading: membersLoading,
     kickMember,
   } = useGameMembers(gameId ?? null);
+
   useEffect(() => {
+    if (!gameId) return;
     const init = async () => {
-      const [
-        {
-          data: { user },
-        },
-        { data: gameData },
-        { data: sceneData },
-      ] = await Promise.all([
-        supabase.auth.getUser(),
+      const [{ data: gameData }, { data: sceneData }] = await Promise.all([
         supabase.from("games").select("*").eq("id", gameId).single(),
         supabase
           .from("scenes")
@@ -241,11 +442,10 @@ export default function GameLobby() {
       setGame(gameData);
       setScenes(sceneData ?? []);
       setIsOwner(!!user && gameData?.owner_id === user.id);
-      setCurrentUserId(user?.id ?? "");
       setLoading(false);
     };
     init();
-  }, [gameId]);
+  }, [gameId, user]);
 
   if (loading) {
     return (
@@ -280,12 +480,14 @@ export default function GameLobby() {
     .slice(0, 2);
   const accent = accentColor(game.name);
   const playerCount = members.filter((m) => m.user_id !== game.owner_id).length;
+  const currentUserId = user?.id ?? "";
 
   return (
     <div
       className="min-h-screen bg-[#0a0a0f] text-white"
       style={{ fontFamily: "'Georgia', serif" }}
     >
+      {/* Subtle grid background */}
       <div
         className="fixed inset-0 pointer-events-none opacity-[0.025]"
         style={{
@@ -320,10 +522,9 @@ export default function GameLobby() {
       </nav>
 
       <div className="relative z-10 max-w-5xl mx-auto px-6 py-10">
-        {/* ── Campaign header ───────────────────────────────────────────── */}
+        {/* ── Campaign header ─────────────────────────────────────────────── */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-6 mb-10">
           <div className="flex items-center gap-5">
-            {/* Icon — uses icon_url if set, falls back to initials */}
             <div
               className="w-16 h-16 rounded-2xl overflow-hidden flex-shrink-0 shadow-lg"
               style={{ boxShadow: `0 0 24px ${accent}40` }}
@@ -348,7 +549,6 @@ export default function GameLobby() {
                 </div>
               )}
             </div>
-
             <div>
               <h1 className="text-2xl font-bold text-white leading-tight mb-1">
                 {game.name}
@@ -384,7 +584,7 @@ export default function GameLobby() {
           </button>
         </div>
 
-        {/* ── Stats ────────────────────────────────────────────────────── */}
+        {/* ── Stats ──────────────────────────────────────────────────────── */}
         <div className="grid grid-cols-4 gap-4 mb-10">
           <StatBox label="Scenes" value={String(scenes.length)} />
           <StatBox label="Players" value={String(playerCount)} />
@@ -392,8 +592,8 @@ export default function GameLobby() {
           <StatBox label="Status" value={activeScene ? "Active" : "Idle"} />
         </div>
 
-        {/* ── Two columns ──────────────────────────────────────────────── */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+        {/* ── Three-column grid: Players | Scenes | Sheets ───────────────── */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           {/* Members */}
           <div>
             <div className="flex items-center gap-3 mb-4">
@@ -436,6 +636,30 @@ export default function GameLobby() {
                   />
                 ))}
               </div>
+            )}
+          </div>
+          {/* Character Sheets */}
+          <div>
+            <div className="flex items-center gap-3 mb-4">
+              <h2 className="text-white/80 font-semibold text-sm uppercase tracking-widest">
+                Character Sheets
+              </h2>
+              <div className="flex-1 h-px bg-white/6" />
+            </div>
+
+            {membersLoading ? (
+              <div className="flex items-center gap-2 text-stone-500 text-sm py-4">
+                <div className="w-4 h-4 border-2 border-amber-500/20 border-t-amber-500 rounded-full animate-spin" />
+                Loading…
+              </div>
+            ) : (
+              <CharacterSheetsPanel
+                gameId={gameId!}
+                currentUserId={currentUserId}
+                isGM={isOwner}
+                members={members}
+                ownerId={""}
+              />
             )}
           </div>
 

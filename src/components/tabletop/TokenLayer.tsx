@@ -10,12 +10,32 @@ interface TokenLayerProps {
   gridType: GridType;
   snapEnabled: boolean;
   isGM: boolean;
+  currentUserId: string;
   disableDrag: boolean;
   onMoveToken: (id: string, x: number, y: number) => void;
   onContextMenu: (token: TokenType, screenX: number, screenY: number) => void;
   onDeleteTokens: (ids: string[]) => void;
-  /** Called whenever the selection changes — used by parent for arrow-key movement */
   onSelectionChange?: (ids: string[]) => void;
+}
+
+// Permission rules:
+//   GM              → always full control
+//   player_editable, no owner_id  → any player can control (unassigned)
+//   player_editable, owner_id set → only that player can control
+//   not player_editable           → no player control
+function canControlToken(
+  token: TokenType,
+  isGM: boolean,
+  currentUserId: string,
+): boolean {
+  if (isGM) return true;
+  if (!token.player_editable) return false;
+  if (!token.owner_id) return true; // unowned — any player
+  return token.owner_id === currentUserId; // owned — only the owner
+}
+
+function canInteractWithToken(token: TokenType, isGM: boolean): boolean {
+  return isGM || token.player_editable;
 }
 
 export default function TokenLayer({
@@ -23,6 +43,7 @@ export default function TokenLayer({
   gridType,
   snapEnabled,
   isGM,
+  currentUserId,
   disableDrag,
   onMoveToken,
   onContextMenu,
@@ -32,7 +53,6 @@ export default function TokenLayer({
   const tokens = useGameStore((s) => s.tokens);
   const storeMoveToken = useGameStore((s) => s.moveToken);
 
-  // ── Selection ──────────────────────────────────────────────────────────────
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const selectedIdsRef = useRef<Set<string>>(new Set());
 
@@ -47,7 +67,7 @@ export default function TokenLayer({
 
   const handleSelect = useCallback(
     (token: TokenType, additive: boolean) => {
-      if (!isGM && !token.player_editable) return;
+      if (!canInteractWithToken(token, isGM)) return;
       const prev = selectedIdsRef.current;
       const next = new Set(prev);
       if (additive) {
@@ -65,7 +85,6 @@ export default function TokenLayer({
     [isGM, syncSelection],
   );
 
-  // ── Multi-token drag ───────────────────────────────────────────────────────
   const dragStartPositions = useRef<Map<string, { x: number; y: number }>>(
     new Map(),
   );
@@ -74,13 +93,8 @@ export default function TokenLayer({
   const handleDragStart = useCallback(
     (token: TokenType) => {
       const current = selectedIdsRef.current;
-      let activeIds: Set<string>;
-      if (!current.has(token.id)) {
-        activeIds = new Set([token.id]);
-        syncSelection(activeIds);
-      } else {
-        activeIds = current;
-      }
+      const activeIds = current.has(token.id) ? current : new Set([token.id]);
+      if (!current.has(token.id)) syncSelection(activeIds);
       dragStartPrimary.current = { x: token.x, y: token.y };
       dragStartPositions.current = new Map(
         tokens
@@ -100,9 +114,8 @@ export default function TokenLayer({
     ) => {
       const start = dragStartPrimary.current;
       if (!start) return;
-
-      let sx = rawX;
-      let sy = rawY;
+      let sx = rawX,
+        sy = rawY;
       if (snapEnabled) {
         const s = snapToGrid(rawX, rawY, gridSize, gridType);
         sx = s.x;
@@ -110,9 +123,8 @@ export default function TokenLayer({
         node.x(sx);
         node.y(sy);
       }
-
-      const dx = sx - start.x;
-      const dy = sy - start.y;
+      const dx = sx - start.x,
+        dy = sy - start.y;
       dragStartPositions.current.forEach((startPos, id) => {
         if (id === primaryId) return;
         storeMoveToken(id, startPos.x + dx, startPos.y + dy);
@@ -125,29 +137,24 @@ export default function TokenLayer({
     (rawX: number, rawY: number) => {
       const start = dragStartPrimary.current;
       if (!start) return;
-
-      let fx = rawX;
-      let fy = rawY;
+      let fx = rawX,
+        fy = rawY;
       if (snapEnabled) {
         const s = snapToGrid(rawX, rawY, gridSize, gridType);
         fx = s.x;
         fy = s.y;
       }
-
-      const dx = fx - start.x;
-      const dy = fy - start.y;
-
+      const dx = fx - start.x,
+        dy = fy - start.y;
       dragStartPositions.current.forEach((startPos, id) => {
         onMoveToken(id, startPos.x + dx, startPos.y + dy);
       });
-
       dragStartPrimary.current = null;
       dragStartPositions.current = new Map();
     },
     [snapEnabled, gridSize, gridType, onMoveToken],
   );
 
-  // ── Delete key ────────────────────────────────────────────────────────────
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key !== "Backspace" && e.key !== "Delete") return;
@@ -156,8 +163,8 @@ export default function TokenLayer({
       const ids = selectedIdsRef.current;
       if (ids.size === 0) return;
       const toDelete = [...ids].filter((id) => {
-        if (isGM) return true;
-        return tokens.find((t) => t.id === id)?.player_editable ?? false;
+        const token = tokens.find((t) => t.id === id);
+        return token ? canControlToken(token, isGM, currentUserId) : false;
       });
       if (toDelete.length === 0) return;
       const names = toDelete
@@ -176,9 +183,8 @@ export default function TokenLayer({
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [tokens, isGM, onDeleteTokens, syncSelection]);
+  }, [tokens, isGM, currentUserId, onDeleteTokens, syncSelection]);
 
-  // Clean stale selections
   useEffect(() => {
     const tokenIds = new Set(tokens.map((t) => t.id));
     const current = selectedIdsRef.current;
@@ -189,7 +195,8 @@ export default function TokenLayer({
   return (
     <Group>
       {tokens.map((token) => {
-        const canInteract = isGM || token.player_editable;
+        const canControl = canControlToken(token, isGM, currentUserId);
+        const canInteract = canInteractWithToken(token, isGM);
         return (
           <Token
             key={token.id}
@@ -198,10 +205,11 @@ export default function TokenLayer({
             gridType={gridType}
             snapEnabled={snapEnabled}
             isGM={isGM}
+            currentUserId={currentUserId}
             selected={selectedIds.has(token.id)}
-            draggable={!disableDrag && canInteract}
-            onSelect={handleSelect}
-            onContextMenu={onContextMenu}
+            draggable={!disableDrag && canControl}
+            onSelect={canInteract ? handleSelect : undefined}
+            onContextMenu={canInteract ? onContextMenu : undefined}
             onDragStart={() => handleDragStart(token)}
             onDragMove={(e) => {
               const n = e.target;

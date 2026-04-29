@@ -1,25 +1,15 @@
-import { useEffect, useState } from "react";
 import { Navigate, useLocation } from "react-router-dom";
-import { supabase } from "./services/supabase";
 import React from "react";
+import { useAuthStore } from "./store/AuthStore";
 
 export default function ProtectedRoute({
   children,
 }: {
   children: React.ReactElement;
 }) {
-  const [user, setUser] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
+  const user = useAuthStore((s) => s.user);
+  const loading = useAuthStore((s) => s.loading);
   const location = useLocation();
-
-  useEffect(() => {
-    const checkUser = async () => {
-      const { data } = await supabase.auth.getUser();
-      setUser(data.user);
-      setLoading(false);
-    };
-    checkUser();
-  }, []);
 
   if (loading) {
     return (
@@ -30,10 +20,6 @@ export default function ProtectedRoute({
   }
 
   if (!user) {
-    // Preserve the intended destination so we can redirect back after login.
-    // Send unauthenticated users to /home (public landing) unless they had a
-    // specific deep link (e.g. /invite/abc) in which case /login handles the
-    // redirect param so they land back after signing in.
     const isDeepLink = location.pathname !== "/";
     if (isDeepLink) {
       return (

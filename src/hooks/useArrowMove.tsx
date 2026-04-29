@@ -54,11 +54,9 @@ export function useArrowKeyTokenMove({
         if (!token) continue;
 
         if (!isGM) {
-          const ownedByMe = token.owner_id === currentUserId;
-          const editable = token.player_editable;
-          if (!ownedByMe && !editable) continue;
-          if (editable && token.owner_id && token.owner_id !== currentUserId)
-            continue;
+          if (!token.player_editable) continue;
+          // Unowned = any player can move; owned = only the assigned player
+          if (token.owner_id && token.owner_id !== currentUserId) continue;
         }
 
         let newX = token.x + dx;
@@ -66,7 +64,6 @@ export function useArrowKeyTokenMove({
 
         if (snapToGrid && gridSize > 0) {
           const half = gridSize / 2;
-
           newX = Math.round((newX - half) / gridSize) * gridSize + half;
           newY = Math.round((newY - half) / gridSize) * gridSize + half;
         }

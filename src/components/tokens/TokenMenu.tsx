@@ -12,6 +12,7 @@ interface TokenContextMenuProps {
   gridSize: number;
   feetPerSquare: number;
   isGM: boolean;
+  currentUserId: string;
   onRename: (id: string, name: string) => void;
   onToggleVisibility: (id: string, visible: boolean) => void;
   onTogglePlayerEditable: (id: string, editable: boolean) => void;
@@ -66,11 +67,7 @@ function MenuItem({
   return (
     <button
       onClick={onClick}
-      className={`w-full flex items-center gap-2.5 px-3 py-2 text-sm transition-colors duration-100 ${
-        danger
-          ? "text-red-400/80 hover:bg-red-500/10 hover:text-red-400"
-          : "text-white/65 hover:bg-white/7 hover:text-white/90"
-      }`}
+      className={`w-full flex items-center gap-2.5 px-3 py-2 text-sm transition-colors duration-100 ${danger ? "text-red-400/80 hover:bg-red-500/10 hover:text-red-400" : "text-white/65 hover:bg-white/7 hover:text-white/90"}`}
     >
       <span className="text-base w-4 text-center flex-shrink-0">{icon}</span>
       <span className="flex-1 text-left">{label}</span>
@@ -82,11 +79,7 @@ function MenuItem({
 function TogglePill({ value }: { value: boolean }) {
   return (
     <span
-      className={`text-[10px] px-1.5 py-0.5 rounded border ${
-        value
-          ? "bg-amber-500/20 border-amber-500/30 text-amber-300"
-          : "bg-white/5 border-white/10 text-white/30"
-      }`}
+      className={`text-[10px] px-1.5 py-0.5 rounded border ${value ? "bg-amber-500/20 border-amber-500/30 text-amber-300" : "bg-white/5 border-white/10 text-white/30"}`}
     >
       {value ? "On" : "Off"}
     </span>
@@ -101,6 +94,7 @@ export default function TokenContextMenu({
   gridSize,
   feetPerSquare,
   isGM,
+  currentUserId,
   onRename,
   onToggleVisibility,
   onTogglePlayerEditable,
@@ -124,16 +118,28 @@ export default function TokenContextMenu({
   const [showStats, setShowStats] = useState(stats?.showStats ?? false);
   const [vision_radius, setVisionRadius] = useState(stats?.vision_radius ?? 0);
   const darkvision = stats?.darkvision ?? 0;
-  // Auras — safe extraction from stats_json (may be typed loosely)
   const [auras, setAuras] = useState<Aura[]>(() => {
     const raw = (stats as any)?.auras;
     return Array.isArray(raw) ? raw : [];
   });
-
   const [sizeInput, setSizeInput] = useState(token.token_size ?? 1);
   const [pos, setPos] = useState({ x: screenX, y: screenY });
 
-  const canEdit = isGM || token.player_editable;
+  // ── Permission model ───────────────────────────────────────────────────────
+  const isOwner = token.owner_id === currentUserId;
+  const isUnowned = token.player_editable && !token.owner_id;
+  const isOtherOwned = token.player_editable && !!token.owner_id && !isOwner;
+
+  // Move/edit/rename: GM always; unowned player_editable: any player;
+  // owned player_editable: only the assigned player
+  const canControl = isGM || isUnowned || (token.player_editable && isOwner);
+
+  // Sheet is only meaningful once a token has an owner.
+  // GM can always open via the "Character Sheet" or assign flow.
+  // Players: only if token is owned (own = edit, other = view-only).
+  const canViewSheet = isGM
+    ? token.player_editable // GM sees sheet option on any player token
+    : token.player_editable && !!token.owner_id; // players only if assigned
 
   useEffect(() => {
     const el = menuRef.current;
@@ -190,7 +196,6 @@ export default function TokenContextMenu({
     gridType === "hex"
       ? `${sizeInput.toFixed(1)}× hex`
       : `${sizeInput.toFixed(1)}× cells`;
-
   const inputCls =
     "w-full bg-white/5 border border-white/15 rounded-md px-2.5 py-1.5 text-sm text-white placeholder-white/25 focus:outline-none focus:border-amber-500/60 transition-colors";
   const numInputCls =
@@ -203,7 +208,7 @@ export default function TokenContextMenu({
       style={{ left: pos.x, top: pos.y }}
       onContextMenu={(e) => e.preventDefault()}
     >
-      {/* ── Header ─────────────────────────────────────────────────────────── */}
+      {/* Header */}
       <div className="px-3 pt-3 pb-2 border-b border-white/8">
         <div className="flex items-center gap-2">
           {token.image_url ? (
@@ -230,11 +235,19 @@ export default function TokenContextMenu({
               <span className="text-[10px] text-white/30">
                 Size {sizeLabel}
               </span>
-              {token.player_editable && (
+              {isOwner && token.player_editable && (
                 <>
                   <span className="text-[10px] text-white/20">·</span>
-                  <span className="text-[10px] text-emerald-400/70">
-                    Editable
+                  <span className="text-[10px] text-sky-400/70">
+                    Your token
+                  </span>
+                </>
+              )}
+              {isUnowned && !isGM && (
+                <>
+                  <span className="text-[10px] text-white/20">·</span>
+                  <span className="text-[10px] text-amber-400/50">
+                    Unassigned
                   </span>
                 </>
               )}
@@ -254,7 +267,7 @@ export default function TokenContextMenu({
         ) : null}
       </div>
 
-      {/* ── Rename mode ────────────────────────────────────────────────────── */}
+      {/* Rename mode */}
       {mode === "rename" && (
         <div className="px-3 py-2.5 border-b border-white/8 flex flex-col gap-2">
           <input
@@ -285,10 +298,9 @@ export default function TokenContextMenu({
         </div>
       )}
 
-      {/* ── Stats mode ──────────────────────────────────────────────────────── */}
+      {/* Stats mode */}
       {mode === "stats" && (
         <div className="px-3 py-2.5 border-b border-white/8 flex flex-col gap-2 max-h-[70vh] overflow-y-auto">
-          {/* HP / Max / AC */}
           <div className="grid grid-cols-3 gap-2">
             {[
               { label: "HP", value: hp, set: setHp, min: 0 },
@@ -310,8 +322,6 @@ export default function TokenContextMenu({
             ))}
           </div>
           <HpBar hp={hp} maxHp={maxHp} />
-
-          {/* Vision radius (in world units) — shown as feet */}
           {isGM && (
             <div className="flex items-center gap-2">
               <span className="text-[10px] text-white/30 uppercase tracking-wider w-20 flex-shrink-0">
@@ -334,25 +344,19 @@ export default function TokenContextMenu({
                       : ft,
                   );
                 }}
-                className="w-16 bg-white/5 border border-white/10 rounded px-2 py-0.5 text-xs text-white text-center
-                  focus:outline-none focus:border-amber-500/50 [appearance:textfield]
-                  [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                className="w-16 bg-white/5 border border-white/10 rounded px-2 py-0.5 text-xs text-white text-center focus:outline-none focus:border-amber-500/50 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
               />
               <span className="text-[10px] text-white/30">ft</span>
             </div>
           )}
-
-          {/* Aura editor */}
           <AuraEditor
             auras={auras}
             gridSize={gridSize}
             feetPerSquare={feetPerSquare}
-            canEdit={canEdit}
+            canEdit={canControl}
             onChange={setAuras}
             tokenSize={token.scale}
           />
-
-          {/* Show stats toggle — GM only */}
           {isGM && (
             <button
               onClick={() => setShowStats((v) => !v)}
@@ -362,7 +366,6 @@ export default function TokenContextMenu({
               <TogglePill value={showStats} />
             </button>
           )}
-
           <div className="flex gap-2">
             <button
               onClick={commitStats}
@@ -380,19 +383,22 @@ export default function TokenContextMenu({
         </div>
       )}
 
-      {/* ── Menu items ──────────────────────────────────────────────────────── */}
+      {/* Menu items */}
       {mode === null && (
         <div className="py-1">
-          {token.player_editable && (
+          {/* Character sheet — hidden for unowned tokens (players only) */}
+          {canViewSheet && (
             <MenuItem
               icon="📋"
-              label="Character Sheet"
+              label={isOtherOwned ? "View Character Sheet" : "Character Sheet"}
               onClick={() => {
                 onOpenSheet(token.id);
                 onClose();
               }}
             />
           )}
+
+          {/* NPC stat block — GM only, non-player tokens */}
           {isGM &&
             !token.player_editable &&
             hasStatBlock &&
@@ -416,14 +422,16 @@ export default function TokenContextMenu({
               }}
             />
           )}
-          {canEdit && (
+
+          {/* Edit controls */}
+          {canControl && (
             <MenuItem
               icon="✏"
               label="Rename"
               onClick={() => setMode("rename")}
             />
           )}
-          {canEdit && (
+          {canControl && (
             <div className="px-3 py-2 flex flex-col gap-1.5">
               <div className="flex items-center justify-between">
                 <span className="text-[10px] text-white/30 uppercase tracking-wider">
@@ -452,7 +460,7 @@ export default function TokenContextMenu({
               </div>
             </div>
           )}
-          {canEdit && (
+          {canControl && (
             <MenuItem
               icon="❤"
               label="Edit HP / AC"
@@ -460,6 +468,8 @@ export default function TokenContextMenu({
               right={stats?.showStats ? <TogglePill value={true} /> : undefined}
             />
           )}
+
+          {/* GM-only controls */}
           {isGM && (
             <>
               <MenuItem
@@ -501,7 +511,14 @@ export default function TokenContextMenu({
               />
             </>
           )}
-          {!canEdit && (
+
+          {/* Info for non-controlling players */}
+          {isOtherOwned && (
+            <p className="px-3 py-2 text-xs text-white/25 text-center">
+              View only — controlled by another player
+            </p>
+          )}
+          {!isGM && !canControl && !canViewSheet && (
             <p className="px-3 py-3 text-xs text-white/25 text-center">
               This token is GM controlled
             </p>
