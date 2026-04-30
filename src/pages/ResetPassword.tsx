@@ -45,28 +45,24 @@ export default function ResetPassword() {
   // before we can call updateUser.
   useEffect(() => {
     const { data: listener } = supabase.auth.onAuthStateChange(
-      (event, _session) => {
-        if (event === "PASSWORD_RECOVERY") {
+      (event, session) => {
+        if (
+          event === "PASSWORD_RECOVERY" ||
+          (event === "SIGNED_IN" && session)
+        ) {
           setSessionReady(true);
         }
-
-        const hash = window.location.hash;
-        if (hash && hash.includes("type=recovery")) {
-          supabase.auth.getSession().then(({ data }) => {
-            if (data.session) setSessionReady(true);
-          });
-        }
-
-        const { data: listener } = supabase.auth.onAuthStateChange(
-          (event, _session) => {
-            if (event === "PASSWORD_RECOVERY") {
-              setSessionReady(true);
-            }
-          },
-        );
-        return () => listener.subscription.unsubscribe();
       },
     );
+
+    // Also check if there's already an active session
+    // (in case the auth state change already fired before this component mounted)
+    supabase.auth.getSession().then(({ data }) => {
+      if (data.session) {
+        setSessionReady(true);
+      }
+    });
+
     return () => listener.subscription.unsubscribe();
   }, []);
 
