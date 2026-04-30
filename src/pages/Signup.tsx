@@ -86,6 +86,7 @@ export default function Signup() {
       email,
       password,
       options: {
+        emailRedirectTo: `${window.location.origin}/`,
         data: {
           username: cleanUsername,
           display_name: cleanDisplayName,
