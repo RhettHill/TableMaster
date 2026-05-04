@@ -2,7 +2,26 @@ import type { ActiveTool } from "../../types/Types";
 import type { VisibilityMode } from "../../hooks/useFog";
 import { useMeasurementStore, SnapMode } from "../../store/MeasurementStore";
 import VisionRadiusControl from "./visionRadiusContol";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
+
+// ── Mobile detection ──────────────────────────────────────────────────────────
+
+function useIsMobile() {
+  const [isMobile, setIsMobile] = useState(() =>
+    typeof window !== "undefined"
+      ? window.matchMedia("(pointer: coarse), (max-width: 768px)").matches
+      : false,
+  );
+  useEffect(() => {
+    const mq = window.matchMedia("(pointer: coarse), (max-width: 768px)");
+    const handler = (e: MediaQueryListEvent) => setIsMobile(e.matches);
+    mq.addEventListener("change", handler);
+    return () => mq.removeEventListener("change", handler);
+  }, []);
+  return isMobile;
+}
+
+// ── Props ─────────────────────────────────────────────────────────────────────
 
 interface ToolbarProps {
   activeTool: ActiveTool;
@@ -13,7 +32,6 @@ interface ToolbarProps {
   onDiceToggle: () => void;
   onOpenSheet: () => void;
   gmPanelOpen: boolean;
-  // Vision control (players only, shown when lighting mode is active)
   visibilityMode?: VisibilityMode;
   currentUserId?: string;
   onEditStats?: (
@@ -28,6 +46,8 @@ interface ToolbarProps {
     },
   ) => void;
 }
+
+// ── Desktop components ────────────────────────────────────────────────────────
 
 function ToolButton({
   icon,
@@ -144,7 +164,17 @@ function Divider() {
   return <div className="w-6 h-px bg-white/10 mx-auto" />;
 }
 
-export default function Toolbar({
+// ── Mobile toolbar ────────────────────────────────────────────────────────────
+
+interface MobileToolDef {
+  icon: string;
+  label: string;
+  tool?: ActiveTool;
+  action?: () => void;
+  isActive?: boolean;
+}
+
+function MobileToolbar({
   activeTool,
   isGM,
   diceOpen,
@@ -154,9 +184,178 @@ export default function Toolbar({
   onOpenSheet,
   gmPanelOpen,
   visibilityMode,
-  currentUserId,
-  onEditStats,
 }: ToolbarProps) {
+  const [expanded, setExpanded] = useState(false);
+  const snapMode = useMeasurementStore((s) => s.snapMode);
+  const setSnapMode = useMeasurementStore((s) => s.setSnapMode);
+
+  const primaryTools: MobileToolDef[] = [
+    { icon: "↖", label: "Select", tool: "select" },
+    { icon: "✥", label: "Pan", tool: "pan" },
+    { icon: "📏", label: "Ruler", tool: "ruler" },
+    { icon: "⭕", label: "Circle", tool: "circle" },
+  ];
+
+  const secondaryTools: MobileToolDef[] = [
+    { icon: "📐", label: "Cone", tool: "cone" },
+    { icon: "⬜", label: "Square", tool: "square" },
+    { icon: "▬", label: "Line", tool: "line" },
+    { icon: "🎲", label: "Dice", action: onDiceToggle, isActive: diceOpen },
+    ...(!isGM ? [{ icon: "📋", label: "Sheet", action: onOpenSheet }] : []),
+    ...(isGM
+      ? [
+          {
+            icon: "⚙",
+            label: "GM",
+            action: onGMPanelToggle,
+            isActive: gmPanelOpen,
+          },
+        ]
+      : []),
+    ...(isGM && visibilityMode === "lighting"
+      ? [
+          { icon: "🧱", label: "Wall", tool: "wall" as ActiveTool },
+          { icon: "🚪", label: "Door", tool: "door" as ActiveTool },
+          { icon: "🗑", label: "Erase", tool: "erase" as ActiveTool },
+        ]
+      : []),
+    ...(isGM && (visibilityMode === "fog" || visibilityMode === "lighting")
+      ? [
+          { icon: "👁", label: "Reveal", tool: "fog_reveal" as ActiveTool },
+          { icon: "🌑", label: "Hide", tool: "fog_hide" as ActiveTool },
+        ]
+      : []),
+  ];
+
+  return (
+    // Safe-area padding for iPhone home bar
+    <div className="fixed bottom-0 left-0 right-0 z-30 pointer-events-none pb-safe">
+      {/* Expanded tray */}
+      {expanded && (
+        <div className="pointer-events-auto mx-2 mb-1 rounded-2xl border border-white/15 bg-black/85 backdrop-blur-xl shadow-2xl p-3">
+          <div className="flex flex-wrap gap-2 justify-center">
+            {secondaryTools.map((t, i) => {
+              const isActive = t.tool ? activeTool === t.tool : t.isActive;
+              return (
+                <button
+                  key={i}
+                  onPointerDown={(e) => {
+                    e.stopPropagation();
+                    if (t.tool) onToolChange(t.tool);
+                    else t.action?.();
+                    if (!t.action) setExpanded(false);
+                  }}
+                  className={`flex flex-col items-center gap-1 px-3 py-2.5 rounded-xl border transition-all min-w-[58px]
+                    ${
+                      isActive
+                        ? "bg-amber-500/25 border-amber-500/60 text-amber-300"
+                        : "bg-white/8 border-white/12 text-white/65 active:bg-white/15"
+                    }`}
+                >
+                  <span className="text-xl leading-none">{t.icon}</span>
+                  <span className="text-[9px] uppercase tracking-wide font-semibold">
+                    {t.label}
+                  </span>
+                </button>
+              );
+            })}
+
+            {/* Snap toggle */}
+            <button
+              onPointerDown={(e) => {
+                e.stopPropagation();
+                setSnapMode(snapMode === "center" ? "corner" : "center");
+              }}
+              className="flex flex-col items-center gap-1 px-3 py-2.5 rounded-xl border border-sky-500/40 bg-sky-500/15 text-sky-300 min-w-[58px]"
+            >
+              <span className="text-xl leading-none">
+                {snapMode === "center" ? "⊕" : "⋅"}
+              </span>
+              <span className="text-[9px] uppercase tracking-wide font-semibold">
+                {snapMode === "center" ? "Ctr" : "Cor"}
+              </span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Primary pill */}
+      <div className="pointer-events-auto mx-2 mb-2 rounded-2xl border border-white/15 bg-black/80 backdrop-blur-xl shadow-2xl">
+        <div className="flex items-stretch gap-0.5 px-1.5 py-1.5">
+          {primaryTools.map((t) => {
+            const isActive = t.tool ? activeTool === t.tool : false;
+            return (
+              <button
+                key={t.tool}
+                onPointerDown={(e) => {
+                  e.stopPropagation();
+                  if (t.tool) {
+                    onToolChange(t.tool);
+                    setExpanded(false);
+                  }
+                }}
+                className={`flex-1 flex flex-col items-center gap-0.5 py-2.5 rounded-xl border transition-all
+                  ${
+                    isActive
+                      ? "bg-amber-500/25 border-amber-500/60 text-amber-300"
+                      : "bg-transparent border-transparent text-white/55 active:bg-white/10"
+                  }`}
+              >
+                <span className="text-2xl leading-none">{t.icon}</span>
+                <span className="text-[8px] uppercase tracking-wide font-semibold">
+                  {t.label}
+                </span>
+              </button>
+            );
+          })}
+
+          <div className="w-px bg-white/10 mx-0.5 self-stretch my-1" />
+
+          {/* More / collapse */}
+          <button
+            onPointerDown={(e) => {
+              e.stopPropagation();
+              setExpanded((v) => !v);
+            }}
+            className={`flex-1 flex flex-col items-center gap-0.5 py-2.5 rounded-xl border transition-all
+              ${
+                expanded
+                  ? "bg-white/15 border-white/30 text-white"
+                  : "bg-transparent border-transparent text-white/40 active:bg-white/10"
+              }`}
+          >
+            <span className="text-2xl leading-none">
+              {expanded ? "✕" : "⋯"}
+            </span>
+            <span className="text-[8px] uppercase tracking-wide font-semibold">
+              {expanded ? "Close" : "More"}
+            </span>
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Main export ───────────────────────────────────────────────────────────────
+
+export default function Toolbar(props: ToolbarProps) {
+  const {
+    activeTool,
+    isGM,
+    diceOpen,
+    onToolChange,
+    onGMPanelToggle,
+    onDiceToggle,
+    onOpenSheet,
+    gmPanelOpen,
+    visibilityMode,
+    currentUserId,
+    onEditStats,
+  } = props;
+
+  const isMobile = useIsMobile();
+
   const snapMode = useMeasurementStore((s) => s.snapMode);
   const setSnapMode = useMeasurementStore((s) => s.setSnapMode);
   const coneAngle = useMeasurementStore((s) => s.coneAngle);
@@ -172,18 +371,18 @@ export default function Toolbar({
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "t") {
-        toggleSnap();
-      }
+      if (e.key === "t") toggleSnap();
     };
-
     window.addEventListener("keydown", handleKeyDown);
-
-    return () => {
-      window.removeEventListener("keydown", handleKeyDown);
-    };
+    return () => window.removeEventListener("keydown", handleKeyDown);
   }, [snapMode]);
 
+  // Render mobile bottom toolbar on touch devices
+  if (isMobile) {
+    return <MobileToolbar {...props} />;
+  }
+
+  // Desktop side toolbar (unchanged)
   return (
     <div className="pointer-events-none h-full flex items-center">
       <div className="pointer-events-auto ml-2 flex flex-col items-center gap-1.5 py-3 px-1 rounded-xl bg-black/60 backdrop-blur-md border border-white/10 shadow-xl">

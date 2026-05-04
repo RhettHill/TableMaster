@@ -21,6 +21,7 @@ import PingLayer from "./PingLayer";
 import type { Wall } from "../../utils/Raycasting";
 import type { VisibilityMode, FogRegion } from "../../hooks/useFog";
 import { useArrowKeyTokenMove } from "../../hooks/useArrowMove";
+import { useTabletopTouch } from "../../hooks/usetabletoptouch";
 
 const MIN_ZOOM = 0.3;
 const MAX_ZOOM = 3;
@@ -114,7 +115,7 @@ function BrushSizePicker({
   const isFog = activeTool === "fog_reveal" || activeTool === "fog_hide";
   if (!isFog) return null;
   return (
-    <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1 px-3 py-2 rounded-2xl bg-black/70 backdrop-blur-md border border-white/15 shadow-2xl pointer-events-auto select-none">
+    <div className="absolute bottom-20 sm:bottom-6 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1 px-3 py-2 rounded-2xl bg-black/70 backdrop-blur-md border border-white/15 shadow-2xl pointer-events-auto select-none">
       <span className="text-white/40 text-[10px] uppercase tracking-widest mr-1.5">
         Brush
       </span>
@@ -559,6 +560,35 @@ export default function Tabletop({
     [zoom, cameraX, cameraY, setZoomAndCamera],
   );
 
+  // ── Touch support ─────────────────────────────────────────────────────────
+  // Get the actual Konva stage container DOM element
+  const [stageContainer, setStageContainer] = useState<HTMLElement | null>(
+    null,
+  );
+  useEffect(() => {
+    // After size is known the stage is mounted; grab its container div
+    if (size.width > 0 && containerRef.current) {
+      const el =
+        containerRef.current.querySelector("canvas")?.parentElement ?? null;
+      setStageContainer(el);
+    }
+  }, [size.width]);
+
+  const toolBlocksPan = isMeasureTool(activeTool) || isWallTool || isFogTool;
+
+  useTabletopTouch({
+    containerEl: stageContainer,
+    zoom,
+    cameraX,
+    cameraY,
+    setZoomAndCamera,
+    panCamera,
+    minZoom: MIN_ZOOM,
+    maxZoom: MAX_ZOOM,
+    onPing,
+    toolBlocksPan,
+  });
+
   const hasOverlay = mapIsAnimated || mapIsVideo;
 
   const overlayProps = {
@@ -600,6 +630,8 @@ export default function Tabletop({
               background: hasOverlay ? "transparent" : bgColor,
               position: "relative",
               zIndex: 1,
+              // Prevent native touch behaviors interfering
+              touchAction: "none",
             }}
           >
             <Layer>
@@ -618,9 +650,7 @@ export default function Tabletop({
                   gridType={gridType}
                   snapEnabled={snapEnabled}
                   isGM={isGM}
-                  disableDrag={
-                    isMeasureTool(activeTool) || isWallTool || isFogTool
-                  }
+                  disableDrag={toolBlocksPan}
                   onMoveToken={onMoveToken}
                   onContextMenu={(token, screenX, screenY) =>
                     setContextMenu({ token, screenX, screenY })
